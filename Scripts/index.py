@@ -3,7 +3,7 @@ import math
 import time
 import json
 import os
-from collections import deque
+import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QHBoxLayout, 
                              QVBoxLayout, QGridLayout, QLabel, QSplitter)
 from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal, QPointF
@@ -72,32 +72,62 @@ class SerialReader(QThread):
     def run(self):
         self.running = True
         try:
-            # Open with 0.001 timeout matching user's working configuration
-            ser = serial.Serial(self.port, self.baud, timeout=0.001)
-            ser.dtr = True
-            ser.rts = True
+            # Open WITHOUT asserting DTR/RTS to prevent the ESP32 auto-reset circuit
+            # from rebooting the microcontroller (DTR high → EN pin reset pulse).
+            # This matches Arduino Serial Monitor behaviour: connect to an already-running board.
+            ser = serial.Serial()
+            ser.write_timeout = 0
+            ser.port = self.port
+            ser.baudrate = self.baud
+            ser.timeout = 0.05
+            ser.dtr = False
+            ser.rts = False
+            ser.open()
+            print(f"[COM] Serial port {self.port} opened successfully (baud={self.baud}, timeout=0.1s, DTR=False)")
             self.status_changed.emit(f"Connected: {self.port}", "green")
+
+            # Flush any partial data sitting in the OS buffer and discard the first
+            # (potentially incomplete) line so we start on a clean line boundary.
             ser.reset_input_buffer()
-            
+            ser.readline()
+            print("[COM] Input buffer reset, first partial line discarded. Entering read loop...")
+
             while self.running:
-                while ser.in_waiting and self.running:
-                    try:
-                        line = ser.readline().decode('utf-8', errors='ignore').strip()
-                        if line:
-                            value = float(line)
-                            self.angle_received.emit(value)
-                    except ValueError:
-                        pass
-                self.msleep(5) # short sleep to keep CPU usage low
+                raw = ser.readline()          # blocks up to 0.1s for a '\n'
+                if not raw:
+                    continue                  # timeout with no data – just retry
+
+                try:
+                    line = raw.decode('utf-8', errors='ignore').strip()
+                except Exception as e:
+                    print(f"[COM] Decode error: {e} | raw bytes: {raw!r}")
+                    continue
+
+                if not line:
+                    continue                  # blank line (e.g. lone \r\n)
+
+                try:
+                    value = float(line)
+                except ValueError:
+                    print(f"[COM] Parse error – not a float: '{line}'")
+                    continue
+
+                self.angle_received.emit(value)
+
             ser.close()
+            print("[COM] Serial port closed normally.")
             self.status_changed.emit("Idle", "gray")
+
+        except serial.SerialException as e:
+            print(f"[COM] Serial error on {self.port}: {e}")
+            self.status_changed.emit("Disconnected", "red")
         except Exception as e:
-            print(f"[COM] Connection failed on {self.port}: {e}")
+            print(f"[COM] Unexpected error on {self.port}: {e}")
             self.status_changed.emit("Disconnected", "red")
 
     def stop(self):
         self.running = False
-        self.wait()
+        self.wait(2000)  # wait up to 2s so readline() can finish its current timeout
 
 # ---------------------------------------------------------
 # Card Container matching dashboard styles
@@ -160,6 +190,49 @@ class CanvasWidget(QWidget):
         cx = w / 2.0
         cy = h / 2.0
 
+        # ── Protractor: angle markings around pivot ──
+        protractor_r = 130  # radius of the tick circle
+        tick_font = QFont("Consolas", 8)
+        painter.setFont(tick_font)
+
+        for deg in range(0, 360, 10):
+            rad = math.radians(deg)
+            # tick direction: 0° = straight up, clockwise positive
+            sin_a = math.sin(rad)
+            cos_a = math.cos(rad)
+
+            is_major = (deg % 30 == 0)
+            tick_inner = protractor_r - (12 if is_major else 6)
+            tick_outer = protractor_r
+
+            x1 = cx + sin_a * tick_inner
+            y1 = cy - cos_a * tick_inner
+            x2 = cx + sin_a * tick_outer
+            y2 = cy - cos_a * tick_outer
+
+            if is_major:
+                painter.setPen(QPen(QColor(160, 160, 160), 1.2, Qt.PenStyle.SolidLine))
+            else:
+                painter.setPen(QPen(QColor(200, 200, 200), 0.8, Qt.PenStyle.SolidLine))
+            painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+            # Labels at every 30°
+            if is_major:
+                label_r = protractor_r + 14
+                lx = cx + sin_a * label_r
+                ly = cy - cos_a * label_r
+                painter.setPen(QPen(QColor(140, 140, 140)))
+                text = f"{deg}°"
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(text)
+                th = fm.height()
+                painter.drawText(int(lx - tw / 2), int(ly + th / 4), text)
+
+        # Faint protractor arc
+        painter.setPen(QPen(QColor(220, 220, 220), 0.8, Qt.PenStyle.SolidLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(cx, cy), protractor_r, protractor_r)
+
         # Draw pivot mount (CAD Style circle/crosshair)
         painter.setPen(QPen(QColor(100, 100, 100), 1, Qt.PenStyle.DotLine))
         painter.drawLine(int(cx - 30), int(cy), int(cx + 30), int(cy))
@@ -202,28 +275,45 @@ class MainWindow(QMainWindow):
         self.config = load_config()
 
         # Telemetry state variables (ESP32 is only source of truth)
-        self.dt = 0.008
         self.theta = 0.0
-        self.angle_deg = 180.0
+        self.raw_angle = 0.0       # raw 0-360 from sensor
+        self.angle_dev = 0.0       # deviation from offset (centered on 0)
         self.vel_deg_s = 0.0
-        self.prev_angle = 180.0
+        self.prev_raw = None       # for wrap-aware velocity
         self.last_time = 0.0
         self.elapsed_time = 0.0
+        self.start_time = None     # real clock reference for X axis
+        self.peak_angle = 0.0
+        self.peak_vel = 0.0
+        self.sample_count = 0
+        self.sample_rate = 0.0
+        self.rate_timer = time.time()
+        self.rate_count = 0
+        self._data_dirty = False   # flag: new data arrived since last graph redraw
 
         self.serial_thread = None
         self.is_connected = False
 
-        # Charts history (Angle Plot only)
-        self.history_len = 250
-        self.angle_history = deque([180.0] * self.history_len, maxlen=self.history_len)
+        # Pre-allocated numpy ring buffer for chart data
+        self.history_len = 800
+        self._buf_time = np.zeros(self.history_len, dtype=np.float64)
+        self._buf_angle = np.zeros(self.history_len, dtype=np.float64)
+        self._buf_vel = np.zeros(self.history_len, dtype=np.float64)
+        self._buf_idx = 0      # write cursor
+        self._buf_count = 0    # total samples stored (capped at history_len)
 
         # Initialize Layouts
         self.init_ui()
 
-        # Tick timer (unconditional clock loop at 60+ FPS)
+        # Fast timer: canvas + labels at ~60 FPS
         self.timer = QTimer()
-        self.timer.timeout.connect(self.tick)
-        self.timer.start(8)
+        self.timer.timeout.connect(self.tick_fast)
+        self.timer.start(16)
+
+        # Slow timer: graph redraws at ~20 FPS
+        self.graph_timer = QTimer()
+        self.graph_timer.timeout.connect(self.tick_graph)
+        self.graph_timer.start(50)
 
         # Background connection scanner
         self.port_timer = QTimer()
@@ -306,74 +396,131 @@ class MainWindow(QMainWindow):
 
         # Right Panel: Telemetry Charts and Text Displays
         right_widget = QWidget()
-        right_widget.setFixedWidth(380)
+        right_widget.setFixedWidth(420)
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(16)
+        right_layout.setSpacing(12)
         splitter.addWidget(right_widget)
 
-        # Value Readouts Card
+        # ── Metrics Card ──
         readout_card = CardWidget("LIVE METRICS")
-        readout_layout = QGridLayout()
-        readout_layout.setSpacing(10)
-        
-        lbl_angle_title = QLabel("PENDULUM ANGLE:")
-        lbl_angle_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #555555;")
-        self.lbl_angle_val = QLabel("180.00°")
-        self.lbl_angle_val.setStyleSheet("font-size: 38px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;")
-        
-        lbl_vel_title = QLabel("ANGULAR VELOCITY:")
-        lbl_vel_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #555555;")
-        self.lbl_vel_val = QLabel("0.0°/s")
-        self.lbl_vel_val.setStyleSheet("font-size: 38px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;")
+        readout_grid = QGridLayout()
+        readout_grid.setSpacing(6)
+        big_val_style = "font-size: 32px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
+        small_title_style = "font-size: 10px; font-weight: 800; color: #555555;"
+        small_val_style = "font-size: 16px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
+        spinbox_style = """
+            QDoubleSpinBox {
+                font-family: 'Consolas', monospace;
+                font-size: 14px; font-weight: bold;
+                color: #000000; background: #f5f5f5;
+                border: 1px solid #cccccc; border-radius: 4px;
+                padding: 2px 6px;
+            }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 18px; }
+        """
 
-        readout_layout.addWidget(lbl_angle_title, 0, 0)
-        readout_layout.addWidget(self.lbl_angle_val, 1, 0)
-        readout_layout.addWidget(lbl_vel_title, 2, 0)
-        readout_layout.addWidget(self.lbl_vel_val, 3, 0)
-        readout_card.layout.addLayout(readout_layout)
+        # Row 0-1: Deviation angle (big)
+        lbl_dev_title = QLabel("DEVIATION FROM ZERO:")
+        lbl_dev_title.setStyleSheet(small_title_style)
+        self.lbl_angle_val = QLabel("0.00°")
+        self.lbl_angle_val.setStyleSheet(big_val_style)
+        readout_grid.addWidget(lbl_dev_title, 0, 0, 1, 2)
+        readout_grid.addWidget(self.lbl_angle_val, 1, 0, 1, 2)
+
+        # Row 2-3: Velocity (big)
+        lbl_vel_title = QLabel("ANGULAR VELOCITY:")
+        lbl_vel_title.setStyleSheet(small_title_style)
+        self.lbl_vel_val = QLabel("0.0°/s")
+        self.lbl_vel_val.setStyleSheet(big_val_style)
+        readout_grid.addWidget(lbl_vel_title, 2, 0, 1, 2)
+        readout_grid.addWidget(self.lbl_vel_val, 3, 0, 1, 2)
+
+        # Row 4: Raw angle | Sample rate (side by side)
+        lbl_raw_title = QLabel("RAW SENSOR:")
+        lbl_raw_title.setStyleSheet(small_title_style)
+        self.lbl_raw_val = QLabel("—")
+        self.lbl_raw_val.setStyleSheet(small_val_style)
+        lbl_rate_title = QLabel("SAMPLE RATE:")
+        lbl_rate_title.setStyleSheet(small_title_style)
+        self.lbl_rate_val = QLabel("— Hz")
+        self.lbl_rate_val.setStyleSheet(small_val_style)
+        readout_grid.addWidget(lbl_raw_title, 4, 0)
+        readout_grid.addWidget(lbl_rate_title, 4, 1)
+        readout_grid.addWidget(self.lbl_raw_val, 5, 0)
+        readout_grid.addWidget(self.lbl_rate_val, 5, 1)
+
+        # Row 6: Peak angle | Peak velocity (side by side)
+        lbl_peak_a_title = QLabel("PEAK ANGLE:")
+        lbl_peak_a_title.setStyleSheet(small_title_style)
+        self.lbl_peak_angle = QLabel("0.0°")
+        self.lbl_peak_angle.setStyleSheet(small_val_style)
+        lbl_peak_v_title = QLabel("PEAK VELOCITY:")
+        lbl_peak_v_title.setStyleSheet(small_title_style)
+        self.lbl_peak_vel = QLabel("0.0°/s")
+        self.lbl_peak_vel.setStyleSheet(small_val_style)
+        readout_grid.addWidget(lbl_peak_a_title, 6, 0)
+        readout_grid.addWidget(lbl_peak_v_title, 6, 1)
+        readout_grid.addWidget(self.lbl_peak_angle, 7, 0)
+        readout_grid.addWidget(self.lbl_peak_vel, 7, 1)
+
+        readout_card.layout.addLayout(readout_grid)
         right_layout.addWidget(readout_card)
 
-        # Angle vs Time
-        self.angle_card = CardWidget("ANGLE VS TIME")
+        # ── Angle deviation graph (centered on 0) ──
+        self.angle_card = CardWidget("DEVIATION VS TIME")
         self.angle_plot = pg.PlotWidget()
-        self.angle_curve = self.style_chart(self.angle_plot, 150.0, 210.0, (0, 0, 0, 10))
-        self.angle_target = pg.InfiniteLine(pos=180.0, angle=0, pen=pg.mkPen('#ff3333', width=1.5, style=Qt.PenStyle.DashLine))
-        self.angle_plot.addItem(self.angle_target)
+        self.angle_curve = self.style_chart(self.angle_plot, y_label='Deviation', y_unit='°', line_color='#0066cc')
+        self.angle_zero_line = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen('#ff3333', width=1.5, style=Qt.PenStyle.DashLine))
+        self.angle_plot.addItem(self.angle_zero_line)
         self.angle_card.layout.addWidget(self.angle_plot)
         right_layout.addWidget(self.angle_card, 1)
 
-        splitter.setSizes([950, 380])
+        # ── Velocity graph ──
+        self.vel_card = CardWidget("VELOCITY VS TIME")
+        self.vel_plot = pg.PlotWidget()
+        self.vel_curve = self.style_chart(self.vel_plot, y_label='Velocity', y_unit='°/s', line_color='#cc3333')
+        self.vel_zero_line = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen('#aaaaaa', width=1, style=Qt.PenStyle.DashLine))
+        self.vel_plot.addItem(self.vel_zero_line)
+        self.vel_card.layout.addWidget(self.vel_plot)
+        right_layout.addWidget(self.vel_card, 1)
 
-    def style_chart(self, plot, y_min, y_max, fill_color):
+        splitter.setSizes([950, 420])
+
+    def style_chart(self, plot, y_label='Value', y_unit='', line_color='#000000'):
         plot.setBackground('#ffffff')
         plot_item = plot.getPlotItem()
         plot_item.setContentsMargins(0, 0, 0, 0)
-        plot_item.showGrid(x=True, y=True, alpha=0.1)
+        plot_item.showGrid(x=True, y=True, alpha=0.15)
+        plot_item.setClipToView(True)          # only render visible points
+        plot_item.setDownsampling(mode='peak')  # auto-downsample dense data
 
-        plot_item.showAxis('bottom', False)
         plot_item.showAxis('right', False)
         plot_item.showAxis('top', False)
+        plot_item.enableAutoRange(axis='y')
+
+        font = QFont("Consolas")
+        font.setPointSize(8)
 
         left_axis = plot_item.getAxis('left')
         left_axis.setPen(pg.mkPen('#cccccc', width=1))
         left_axis.setTextPen(pg.mkPen('#555555'))
-        
-        font = QFont("Consolas")
-        font.setPointSize(8)
         left_axis.setTickFont(font)
-        plot_item.setYRange(y_min, y_max)
+        left_axis.setLabel(y_label, units=y_unit, **{'font-size': '10px', 'color': '#555555'})
 
-        curve = plot_item.plot(
-            pen=pg.mkPen('#000000', width=1.5),
-            fillLevel=y_min - 100.0,
-            fillBrush=pg.mkBrush(fill_color)
-        )
+        bottom_axis = plot_item.getAxis('bottom')
+        bottom_axis.setPen(pg.mkPen('#cccccc', width=1))
+        bottom_axis.setTextPen(pg.mkPen('#555555'))
+        bottom_axis.setTickFont(font)
+        bottom_axis.setLabel('Time', units='s', **{'font-size': '10px', 'color': '#555555'})
+
+        curve = plot_item.plot(pen=pg.mkPen(line_color, width=1.5))
         return curve
 
     # ---------------------------------------------------------
     # Background Serial Thread auto-connections
     # ---------------------------------------------------------
+
     def auto_connection_handler(self):
         if self.serial_thread and self.serial_thread.isRunning():
             return
@@ -390,7 +537,8 @@ class MainWindow(QMainWindow):
 
         print(f"[COM] Device detected. Starting serial reader thread on {chosen_port} ({baud} baud)...")
         self.serial_thread = SerialReader(chosen_port, baud)
-        self.serial_thread.angle_received.connect(self.on_angle_received)
+        self.serial_thread.angle_received.connect(
+            self.on_angle_received, Qt.ConnectionType.DirectConnection)
         self.serial_thread.status_changed.connect(self.set_status_indicator)
         self.serial_thread.start()
 
@@ -414,50 +562,99 @@ class MainWindow(QMainWindow):
                 self.serial_thread.stop()
                 self.serial_thread = None
 
+    @staticmethod
+    def _wrap_180(deg):
+        """Wrap an angle into the -180 … +180 range."""
+        return (deg + 180.0) % 360.0 - 180.0
+
     def on_angle_received(self, raw_angle):
         current_time = time.time()
         dt = current_time - self.last_time if self.last_time > 0 else 0.008
         self.last_time = current_time
+        if self.start_time is None:
+            self.start_time = current_time
 
-        # Use the raw angle directly
-        self.angle_deg = raw_angle
-        
-        # Calculate velocity by differentiating consecutive angle measurements
-        self.vel_deg_s = (self.angle_deg - self.prev_angle) / dt if dt > 0 else 0.0
-        self.prev_angle = self.angle_deg
+        self.raw_angle = raw_angle
 
-        # Store radians for the canvas animation directly from raw angle
-        self.theta = math.radians(self.angle_deg)
+        # Deviation from offset, wrapped to -180…+180 → clean sine wave
+        offset = self.config.get("angle_offset", 180.0)
+        self.angle_dev = self._wrap_180(raw_angle - offset)
 
-        # Print to console
-        print(f"[Telemetry] Time: {self.elapsed_time:.2f}s | Angle: {self.angle_deg:.2f}° | Vel: {self.vel_deg_s:.1f}°/s")
+        # Wrap-aware velocity: handles the 0/360 boundary correctly
+        if self.prev_raw is not None and dt > 0:
+            delta = self._wrap_180(raw_angle - self.prev_raw)
+            self.vel_deg_s = delta / dt
+        self.prev_raw = raw_angle
+
+        # Canvas angle (theta=0 is UP)
+        self.theta = math.radians(self.angle_dev)
+
+        # Track peaks
+        self.peak_angle = max(self.peak_angle, abs(self.angle_dev))
+        self.peak_vel = max(self.peak_vel, abs(self.vel_deg_s))
+
+        # Sample rate counter
+        self.rate_count += 1
+        self.sample_count += 1
+        rate_elapsed = current_time - self.rate_timer
+        if rate_elapsed >= 1.0:
+            self.sample_rate = self.rate_count / rate_elapsed
+            self.rate_count = 0
+            self.rate_timer = current_time
+
+        # Write into numpy ring buffer (zero-copy, no allocation)
+        i = self._buf_idx % self.history_len
+        self._buf_time[i] = current_time - self.start_time
+        self._buf_angle[i] = self.angle_dev
+        self._buf_vel[i] = self.vel_deg_s
+        self._buf_idx += 1
+        self._buf_count = min(self._buf_count + 1, self.history_len)
+        self._data_dirty = True
+
+    def _get_buf_slice(self, buf):
+        """Return the ring buffer contents in chronological order as a numpy view."""
+        if self._buf_count < self.history_len:
+            return buf[:self._buf_count]
+        start = self._buf_idx % self.history_len
+        return np.concatenate((buf[start:], buf[:start]))
 
     # ---------------------------------------------------------
-    # Core update tick (unconditional execution)
+    # Fast tick: canvas + labels (~60 FPS)
     # ---------------------------------------------------------
-    def tick(self):
-        self.elapsed_time += self.dt
-
-        # Decimated buffer updates (~32ms)
-        if int(self.elapsed_time / self.dt) % 4 == 0:
-            self.angle_history.append(self.angle_deg)
-            self.angle_curve.setData(list(self.angle_history))
+    def tick_fast(self):
+        self.elapsed_time = (time.time() - self.start_time) if self.start_time else 0.0
 
         # Update text labels
-        self.lbl_angle_val.setText(f"{self.angle_deg:.2f}°")
-        self.lbl_vel_val.setText(f"{self.vel_deg_s:.1f}°/s")
+        self.lbl_angle_val.setText(f"{self.angle_dev:+.2f}°")
+        self.lbl_vel_val.setText(f"{self.vel_deg_s:+.1f}°/s")
+        self.lbl_raw_val.setText(f"{self.raw_angle:.2f}°")
+        self.lbl_rate_val.setText(f"{self.sample_rate:.0f} Hz")
+        self.lbl_peak_angle.setText(f"{self.peak_angle:.1f}°")
+        self.lbl_peak_vel.setText(f"{self.peak_vel:.1f}°/s")
 
         if self.is_connected:
             self.lbl_telemetry.setText(
-                f"Time: {self.elapsed_time:.1f}s | Port: {self.serial_thread.port if self.serial_thread else 'N/A'}"
+                f"Time: {self.elapsed_time:.1f}s | Port: {self.serial_thread.port if self.serial_thread else 'N/A'} | {self.sample_rate:.0f} Hz"
             )
         else:
             self.lbl_telemetry.setText(
                 f"Time: {self.elapsed_time:.1f}s | Port: Searching for hardware..."
             )
 
-        # Repaint canvas
+        # Repaint canvas (very cheap)
         self.canvas_widget.update_state(self.theta)
+
+    # ---------------------------------------------------------
+    # Slow tick: graph redraws (~20 FPS, only when new data)
+    # ---------------------------------------------------------
+    def tick_graph(self):
+        if not self._data_dirty:
+            return
+        self._data_dirty = False
+
+        t = self._get_buf_slice(self._buf_time)
+        self.angle_curve.setData(t, self._get_buf_slice(self._buf_angle))
+        self.vel_curve.setData(t, self._get_buf_slice(self._buf_vel))
 
     def closeEvent(self, event):
         if self.serial_thread:
