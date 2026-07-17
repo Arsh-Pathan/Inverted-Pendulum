@@ -1,7 +1,7 @@
 {
     "preferred_port": "COM3",
     "baud_rate": 115200,
-    "angle_offset": 0.0,
+    "angle_offset": -108.5,
     "angle_scale": 1.0,
     "angle_invert": true
 }

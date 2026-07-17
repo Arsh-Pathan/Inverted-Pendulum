@@ -233,15 +233,34 @@ class CanvasWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(cx, cy), protractor_r, protractor_r)
 
-        # Draw pivot mount (CAD Style circle/crosshair)
-        painter.setPen(QPen(QColor(100, 100, 100), 1, Qt.PenStyle.DotLine))
-        painter.drawLine(int(cx - 30), int(cy), int(cx + 30), int(cy))
-        painter.drawLine(int(cx), int(cy - 30), int(cx), int(cy + 30))
-        painter.drawEllipse(QPointF(cx, cy), 15.0, 15.0)
+        # ── Draw Cart and Rail ──
+        # Rail (thick light gray line)
+        rail_y = cy + 20
+        painter.setPen(QPen(QColor(220, 220, 220), 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(int(cx - 200), int(rail_y), int(cx + 200), int(rail_y))
 
-        # Draw reference upright dotted target line
+        # Cart Body
+        cart_w = 90
+        cart_h = 40
+        painter.setPen(QPen(QColor(60, 60, 60), 2))
+        painter.setBrush(QBrush(QColor(245, 245, 245)))
+        painter.drawRoundedRect(int(cx - cart_w / 2), int(cy - cart_h / 2), cart_w, cart_h, 6, 6)
+
+        # Wheels
+        painter.setBrush(QBrush(QColor(80, 80, 80)))
+        painter.drawEllipse(QPointF(cx - 25, rail_y), 6, 6)
+        painter.drawEllipse(QPointF(cx + 25, rail_y), 6, 6)
+
+        # Pivot mount crosshair on cart
+        painter.setPen(QPen(QColor(100, 100, 100), 1, Qt.PenStyle.DotLine))
+        painter.drawLine(int(cx - 20), int(cy), int(cx + 20), int(cy))
+        painter.drawLine(int(cx), int(cy - 20), int(cx), int(cy + 20))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(cx, cy), 12.0, 12.0)
+
+        # Reference upright dotted target line
         painter.setPen(QPen(QColor(255, 50, 50, 120), 1, Qt.PenStyle.DashLine))
-        painter.drawLine(int(cx), 0, int(cx), h)
+        painter.drawLine(int(cx), int(cy - 180), int(cx), int(cy + 40))
 
         # Pendulum Rod (Black)
         pole_len = 160
@@ -611,12 +630,19 @@ class MainWindow(QMainWindow):
         self._buf_count = min(self._buf_count + 1, self.history_len)
         self._data_dirty = True
 
-    def _get_buf_slice(self, buf):
-        """Return the ring buffer contents in chronological order as a numpy view."""
-        if self._buf_count < self.history_len:
-            return buf[:self._buf_count]
-        start = self._buf_idx % self.history_len
-        return np.concatenate((buf[start:], buf[:start]))
+    def _get_buf_slices(self):
+        """Return atomic slices of the ring buffer to prevent race conditions during updates."""
+        count = self._buf_count
+        idx = self._buf_idx
+        
+        if count < self.history_len:
+            return self._buf_time[:count], self._buf_angle[:count], self._buf_vel[:count]
+            
+        start = idx % self.history_len
+        t = np.concatenate((self._buf_time[start:], self._buf_time[:start]))
+        a = np.concatenate((self._buf_angle[start:], self._buf_angle[:start]))
+        v = np.concatenate((self._buf_vel[start:], self._buf_vel[:start]))
+        return t, a, v
 
     # ---------------------------------------------------------
     # Fast tick: canvas + labels (~60 FPS)
@@ -652,9 +678,9 @@ class MainWindow(QMainWindow):
             return
         self._data_dirty = False
 
-        t = self._get_buf_slice(self._buf_time)
-        self.angle_curve.setData(t, self._get_buf_slice(self._buf_angle))
-        self.vel_curve.setData(t, self._get_buf_slice(self._buf_vel))
+        t, a, v = self._get_buf_slices()
+        self.angle_curve.setData(t, a)
+        self.vel_curve.setData(t, v)
 
     def closeEvent(self, event):
         if self.serial_thread:
