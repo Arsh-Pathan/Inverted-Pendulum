@@ -79,30 +79,30 @@ class SerialReader(QThread):
             self.ser.reset_input_buffer()
             
             while self.running:
-                if self.ser.in_waiting > 0:
-                    try:
-                        line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                        if line:
-                            parts = line.split(',')
-                            if len(parts) >= 3:
-                                theta_deg = float(parts[0])
-                                pos = float(parts[1])
-                                force = float(parts[2])
-                                self.telemetry_received.emit(theta_deg, pos, force)
-                            elif len(parts) == 2:
-                                theta_deg = float(parts[0])
-                                pos = float(parts[1])
-                                self.telemetry_received.emit(theta_deg, pos, 0.0)
-                            elif len(parts) == 1:
-                                theta_deg = float(parts[0])
-                                self.telemetry_received.emit(theta_deg, 0.0, 0.0)
-                    except ValueError:
-                        pass
+                try:
+                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        parts = line.split(',')
+                        if len(parts) >= 3:
+                            theta_deg = float(parts[0])
+                            pos = float(parts[1])
+                            force = float(parts[2])
+                            self.telemetry_received.emit(theta_deg, pos, force)
+                        elif len(parts) == 2:
+                            theta_deg = float(parts[0])
+                            pos = float(parts[1])
+                            self.telemetry_received.emit(theta_deg, pos, 0.0)
+                        elif len(parts) == 1:
+                            theta_deg = float(parts[0])
+                            self.telemetry_received.emit(theta_deg, 0.0, 0.0)
+                except ValueError:
+                    pass
                 self.msleep(2)
             self.ser.close()
             self.ser = None
             self.status_changed.emit("Idle", "gray")
         except Exception as e:
+            print(f"[COM] Connection failed on {self.port}: {e}")
             self.status_changed.emit("Disconnected", "red")
             self.ser = None
 
