@@ -526,6 +526,7 @@ class MainWindow(QMainWindow):
         chosen_port = target_port if target_port in ports else ports[0]
         baud = self.config.get("baud_rate", 115200)
 
+        print(f"[COM] Device detected. Attempting auto-connection on {chosen_port} ({baud} baud)...")
         self.serial_thread = SerialReader(chosen_port, baud)
         self.serial_thread.telemetry_received.connect(self.on_hardware_telemetry)
         self.serial_thread.status_changed.connect(self.set_status_indicator)
@@ -545,6 +546,12 @@ class MainWindow(QMainWindow):
             border-radius: 5px;
             background-color: {color_map.get(state, '#555555')};
         """)
+
+        # Console connection logging
+        if state == "green" and self.serial_thread:
+            print(f"[COM] Successfully connected to {self.serial_thread.port} at {self.config.get('baud_rate', 115200)} baud.")
+        elif state == "red":
+            print(f"[COM] Connection lost or port error on {self.serial_thread.port if self.serial_thread else 'device'}. Retrying in background...")
 
         if state == "red":
             # Clean thread reference on failure so scanner can retry
@@ -593,6 +600,9 @@ class MainWindow(QMainWindow):
                 self.angle_curve.setData(list(self.angle_history))
                 self.pos_curve.setData(list(self.pos_history))
                 self.vel_curve.setData(list(self.vel_history))
+
+                # Console telemetry logs
+                print(f"[Telemetry] Time: {self.elapsed_time:.2f}s | Angle: {display_deg:.2f}° | Vel: {vel_deg_s:.1f}°/s | Pos: {self.x:.2f}m")
 
             self.lbl_telemetry.setText(
                 f"Time: {self.elapsed_time:.1f}s | Angle: {display_deg:.2f}° | "
