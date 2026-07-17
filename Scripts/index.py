@@ -419,22 +419,15 @@ class MainWindow(QMainWindow):
         dt = current_time - self.last_time if self.last_time > 0 else 0.008
         self.last_time = current_time
 
-        offset = self.config.get("angle_offset", 180.0)
-        scale = self.config.get("angle_scale", 1.0)
-        invert = -1.0 if self.config.get("angle_invert", False) else 1.0
-
-        # Calibrate the angle
-        self.angle_deg = (raw_angle - offset) * scale * invert + 180.0
+        # Use the raw angle directly
+        self.angle_deg = raw_angle
         
         # Calculate velocity by differentiating consecutive angle measurements
-        diff = self.angle_deg - self.prev_angle
-        # handle circular wrap-around
-        diff = (diff + 180.0) % 360.0 - 180.0
-        self.vel_deg_s = diff / dt if dt > 0 else 0.0
+        self.vel_deg_s = (self.angle_deg - self.prev_angle) / dt if dt > 0 else 0.0
         self.prev_angle = self.angle_deg
 
-        # Store radians for the canvas animation (where 0 rad is vertical upright)
-        self.theta = math.radians(self.angle_deg - 180.0)
+        # Store radians for the canvas animation directly from raw angle
+        self.theta = math.radians(self.angle_deg)
 
         # Print to console
         print(f"[Telemetry] Time: {self.elapsed_time:.2f}s | Angle: {self.angle_deg:.2f}° | Vel: {self.vel_deg_s:.1f}°/s")
