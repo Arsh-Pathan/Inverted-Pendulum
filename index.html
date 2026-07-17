@@ -100,43 +100,67 @@ def get_com_ports():
     return ports
 
 # ---------------------------------------------------------
-# Threaded Serial Reader to prevent GUI freezes
+# Robust Multi-variable Serial Reader QThread
 # ---------------------------------------------------------
 class SerialReader(QThread):
-    data_received = pyqtSignal(float)
-    status_changed = pyqtSignal(str, str) # text, color (dot state)
+    # telemetry_received carries: angle (deg), position (m), force (N)
+    telemetry_received = pyqtSignal(float, float, float)
+    status_changed = pyqtSignal(str, str)
 
     def __init__(self, port, baud=115200):
         super().__init__()
         self.port = port
         self.baud = baud
         self.running = False
+        self.ser = None
 
     def run(self):
         self.running = True
         try:
-            # Short timeout to avoid blocking indefinitely on close/stop
-            ser = serial.Serial(self.port, self.baud, timeout=0.01)
-            self.status_changed.emit(f"Reading {self.port}", "green")
-            
-            # Flush input buffer on startup
-            ser.reset_input_buffer()
+            self.ser = serial.Serial(self.port, self.baud, timeout=0.01)
+            self.status_changed.emit(f"Connected: {self.port}", "green")
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
             
             while self.running:
-                if ser.in_waiting > 0:
+                if self.ser.in_waiting > 0:
                     try:
-                        line = ser.readline().decode('utf-8', errors='ignore').strip()
+                        line = self.ser.readline().decode('utf-8', errors='ignore').strip()
                         if line:
-                            # Parse float telemetry (assuming it sends degrees around 180)
-                            val = float(line)
-                            self.data_received.emit(val)
+                            # Parse comma-separated variables
+                            parts = line.split(',')
+                            if len(parts) >= 3:
+                                # Full telemetry: angle, position, force
+                                theta_deg = float(parts[0])
+                                pos = float(parts[1])
+                                force = float(parts[2])
+                                self.telemetry_received.emit(theta_deg, pos, force)
+                            elif len(parts) == 2:
+                                # Partial telemetry: angle, position
+                                theta_deg = float(parts[0])
+                                pos = float(parts[1])
+                                self.telemetry_received.emit(theta_deg, pos, 0.0)
+                            elif len(parts) == 1:
+                                # Base case: angle only (matches original index.html)
+                                theta_deg = float(parts[0])
+                                self.telemetry_received.emit(theta_deg, 0.0, 0.0)
                     except ValueError:
-                        pass # skip parsing errors
+                        pass # ignore parsing anomalies
                 self.msleep(2)
-            ser.close()
+            self.ser.close()
+            self.ser = None
             self.status_changed.emit("Idle", "gray")
         except Exception as e:
             self.status_changed.emit(f"COM Error: {str(e)[:16]}", "red")
+            self.ser = None
+
+    def write_data(self, data):
+        # Thread-safe write back to hardware serial link
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.write(data.encode('utf-8'))
+            except Exception as e:
+                print(f"Serial write error: {e}")
 
     def stop(self):
         self.running = False
@@ -175,10 +199,9 @@ class CardWidget(QFrame):
             self.layout.addWidget(self.title_label)
 
 # ---------------------------------------------------------
-# CAD/Engineering Simulation Viewport
+# CAD/Engineering Telemetry Viewport
 # ---------------------------------------------------------
 class CanvasWidget(QWidget):
-    # Click interaction emits impulse magnitude
     disturbed = pyqtSignal(float)
 
     def __init__(self, parent=None):
@@ -186,7 +209,7 @@ class CanvasWidget(QWidget):
         self.setMinimumHeight(380)
         self.setMouseTracking(True)
         self.cart_x = 0.0
-        self.theta = 0.0  # radians (0 is vertical upright)
+        self.theta = 0.0  # radians (0 is upright)
         self.force = 0.0
         self.limit = 2.4
 
@@ -200,7 +223,7 @@ class CanvasWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Clear background to pure black
+        # Clear background
         painter.fillRect(self.rect(), QColor(0, 0, 0))
 
         # CAD Grid overlay
@@ -211,14 +234,11 @@ class CanvasWidget(QWidget):
         for y in range(0, self.height(), grid_size):
             painter.drawLine(0, y, self.width(), y)
 
-        # Base dimensions
         w, h = self.width(), self.height()
         cy = h / 2.0
-        
-        # Pixels-per-meter scaling
         scale = w / 6.0
 
-        # Draw rail line
+        # Draw rail track
         painter.setPen(QPen(QColor(255, 255, 255), 2))
         painter.drawLine(0, int(cy + 15), w, int(cy + 15))
 
@@ -230,17 +250,16 @@ class CanvasWidget(QWidget):
             painter.drawLine(tx, int(cy + 15), tx, int(cy + 22))
             painter.drawText(tx - 15, int(cy + 34), f"{m:+.1f}m")
 
-        # Bounds warnings
+        # Track bounds lines
         painter.setPen(QPen(QColor(255, 50, 50, 90), 1, Qt.PenStyle.DashLine))
         left_bound = int(w / 2.0 - self.limit * scale)
         right_bound = int(w / 2.0 + self.limit * scale)
         painter.drawLine(left_bound, 0, left_bound, h)
         painter.drawLine(right_bound, 0, right_bound, h)
 
-        # Cart position on screen
         cx = w / 2.0 + self.cart_x * scale
 
-        # Draw cart (CAD style: outlined, black filled)
+        # Draw cart (CAD outlined look)
         cart_w, cart_h = 70, 30
         painter.setPen(QPen(QColor(255, 255, 255), 2))
         painter.setBrush(QBrush(QColor(0, 0, 0)))
@@ -251,11 +270,11 @@ class CanvasWidget(QWidget):
         painter.drawEllipse(QPointF(cx - 20, cy + 15), wheel_r, wheel_r)
         painter.drawEllipse(QPointF(cx + 20, cy + 15), wheel_r, wheel_r)
 
-        # Upright reference target line (dotted)
+        # Upright target reference line
         painter.setPen(QPen(QColor(255, 255, 255, 40), 1, Qt.PenStyle.DotLine))
         painter.drawLine(int(cx), 0, int(cx), int(cy))
 
-        # Rod (drawn pivoting around center of cart)
+        # Rod
         pole_len = 130
         px = cx + math.sin(self.theta) * pole_len
         py = cy - math.cos(self.theta) * pole_len
@@ -263,17 +282,17 @@ class CanvasWidget(QWidget):
         painter.setPen(QPen(QColor(255, 255, 255), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
         painter.drawLine(QPointF(cx, cy), QPointF(px, py))
 
-        # Bob (heavy mass)
+        # Heavy Bob mass
         bob_r = 12
         painter.setBrush(QBrush(QColor(255, 255, 255)))
         painter.drawEllipse(QPointF(px, py), bob_r, bob_r)
 
-        # Hinge pin
+        # Center Hinge pin
         painter.setBrush(QBrush(QColor(0, 0, 0)))
         painter.setPen(QPen(QColor(255, 255, 255), 1.5))
         painter.drawEllipse(QPointF(cx, cy), 4, 4)
 
-        # Draw applied force vector indicator
+        # Draw applied force vector indicator arrow
         if abs(self.force) > 0.05:
             painter.setPen(QPen(QColor(255, 255, 255), 1.5))
             painter.setBrush(QBrush(QColor(255, 255, 255)))
@@ -308,7 +327,7 @@ class CanvasWidget(QWidget):
         cx = w / 2.0 + self.cart_x * scale
         click_x = event.position().x()
         
-        # Apply push in direction clicked relative to cart
+        # Apply force disturbance direction based on click
         impulse = 2.5 if click_x > cx else -2.5
         self.disturbed.emit(impulse)
 
@@ -352,11 +371,9 @@ class NNWidget(QWidget):
         for l_idx in range(len(layers) - 1):
             for n1_idx, n1 in enumerate(nodes[l_idx]):
                 for n2_idx, n2 in enumerate(nodes[l_idx+1]):
-                    # Fluctuate transparency to make it look active
                     pulse = (math.sin(self.time * 6.0 + n1_idx * 1.5 + n2_idx) + 1.0) / 2.0
                     
                     if l_idx == len(layers) - 2:
-                        # Output connection depends on force direction
                         color = QColor(255, 255, 255, int(active_strength * 255))
                         width = 1.5
                     else:
@@ -372,7 +389,6 @@ class NNWidget(QWidget):
             for n_idx, n in enumerate(layer_nodes):
                 painter.setPen(Qt.PenStyle.NoPen)
                 if l_idx == len(layers) - 1:
-                    # Output node matches output force activation
                     painter.setBrush(QBrush(QColor(255, 255, 255) if self.force >= 0 else QColor(136, 136, 136)))
                 else:
                     painter.setBrush(QBrush(QColor(255, 255, 255)))
@@ -384,7 +400,7 @@ class NNWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Inverted Pendulum Dashboard")
+        self.setWindowTitle("Inverted Pendulum Telemetry Dashboard")
         self.resize(1400, 850)
         self.setStyleSheet(QSS_STYLE)
 
@@ -402,9 +418,9 @@ class MainWindow(QMainWindow):
         self.fallen_frames = 0
         self.elapsed_time = 0.0
 
-        # State controllers
+        # State controllers: Defaults to Hardware Mode on startup
         self.is_running = False
-        self.is_simulation = True # Fallback mode by default
+        self.is_simulation = False
 
         # Threading reader
         self.serial_thread = None
@@ -418,7 +434,7 @@ class MainWindow(QMainWindow):
         # Setup main layouts
         self.init_ui()
 
-        # Configure real-time tick timer (8ms interval matches physics step dt)
+        # Real-time tick timer (8ms interval matches physics step dt)
         self.timer = QTimer()
         self.timer.timeout.connect(self.tick)
         self.timer.start(8)
@@ -454,7 +470,7 @@ class MainWindow(QMainWindow):
             color: #ffffff;
             letter-spacing: -0.5px;
         """)
-        lbl_subtitle = QLabel("Telemetry / Control CAD Dashboard")
+        lbl_subtitle = QLabel("Real-time Hardware Telemetry Dashboard")
         lbl_subtitle.setStyleSheet("""
             font-size: 13px;
             font-weight: 600;
@@ -464,7 +480,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(lbl_subtitle)
         left_layout.addWidget(header_widget)
 
-        # 2. Main Simulation Viewport Card
+        # 2. Main Viewport Card
         self.sim_card = CardWidget(None)
         self.canvas_widget = CanvasWidget()
         self.canvas_widget.disturbed.connect(self.apply_push)
@@ -474,7 +490,7 @@ class MainWindow(QMainWindow):
         ctrl_row = QHBoxLayout()
         ctrl_row.setSpacing(10)
 
-        self.btn_start = QPushButton("Start")
+        self.btn_start = QPushButton("Start Link")
         self.btn_start.clicked.connect(self.toggle_running)
         
         self.btn_reset = QPushButton("Reset")
@@ -485,7 +501,7 @@ class MainWindow(QMainWindow):
         self.btn_push.clicked.connect(lambda: self.apply_push(random.choice([-2.0, 2.0])))
 
         # Telemetry metrics overlay label
-        self.lbl_telemetry = QLabel("Time: 0.0s | Mode: SIM")
+        self.lbl_telemetry = QLabel("Time: 0.0s | Mode: HW")
         self.lbl_telemetry.setStyleSheet("""
             color: #aaaaaa;
             font-weight: 600;
@@ -523,9 +539,9 @@ class MainWindow(QMainWindow):
         config_grid.setSpacing(15)
 
         # Column A: Connection Parameters
-        config_grid.addWidget(QLabel("TELEMETRY SOURCE:"), 0, 0)
+        config_grid.addWidget(QLabel("DATA SOURCE:"), 0, 0)
         self.cb_mode = QComboBox()
-        self.cb_mode.addItems(["Simulation", "Serial COM Port"])
+        self.cb_mode.addItems(["Serial COM Port", "Simulation Fallback"])
         self.cb_mode.currentTextChanged.connect(self.on_mode_changed)
         config_grid.addWidget(self.cb_mode, 0, 1)
 
@@ -540,11 +556,11 @@ class MainWindow(QMainWindow):
         config_grid.addWidget(self.cb_baud, 2, 1)
 
         self.btn_connect = QPushButton("Connect")
-        self.btn_connect.setEnabled(False) # Only valid in COM Port mode
+        self.btn_connect.setEnabled(True) # Hardware mode by default
         self.btn_connect.clicked.connect(self.toggle_connection)
         config_grid.addWidget(self.btn_connect, 3, 0, 1, 2)
 
-        # Column B: PID Parameters (Simulation tuning)
+        # Column B: PID Tuning parameters (Can be sent to Arduino on slider release!)
         config_grid.addWidget(QLabel("ANGLE KP:"), 0, 2)
         self.sl_kp_theta = QSlider(Qt.Orientation.Horizontal)
         self.sl_kp_theta.setRange(0, 100)
@@ -552,7 +568,9 @@ class MainWindow(QMainWindow):
         config_grid.addWidget(self.sl_kp_theta, 0, 3)
         self.lbl_kp_theta = QLabel("60")
         self.lbl_kp_theta.setStyleSheet("font-family: 'Consolas'; min-width: 25px;")
+        
         self.sl_kp_theta.valueChanged.connect(lambda v: self.lbl_kp_theta.setText(str(v)))
+        self.sl_kp_theta.sliderReleased.connect(self.send_pid_gains_to_serial)
         config_grid.addWidget(self.lbl_kp_theta, 0, 4)
 
         config_grid.addWidget(QLabel("ANGLE KD:"), 1, 2)
@@ -562,7 +580,9 @@ class MainWindow(QMainWindow):
         config_grid.addWidget(self.sl_kd_theta, 1, 3)
         self.lbl_kd_theta = QLabel("15")
         self.lbl_kd_theta.setStyleSheet("font-family: 'Consolas'; min-width: 25px;")
+        
         self.sl_kd_theta.valueChanged.connect(lambda v: self.lbl_kd_theta.setText(str(v)))
+        self.sl_kd_theta.sliderReleased.connect(self.send_pid_gains_to_serial)
         config_grid.addWidget(self.lbl_kd_theta, 1, 4)
 
         config_grid.addWidget(QLabel("POSITION KP:"), 2, 2)
@@ -572,7 +592,9 @@ class MainWindow(QMainWindow):
         config_grid.addWidget(self.sl_kp_x, 2, 3)
         self.lbl_kp_x = QLabel("-2.5")
         self.lbl_kp_x.setStyleSheet("font-family: 'Consolas'; min-width: 25px;")
+        
         self.sl_kp_x.valueChanged.connect(lambda v: self.lbl_kp_x.setText(f"{v/10.0:.1f}"))
+        self.sl_kp_x.sliderReleased.connect(self.send_pid_gains_to_serial)
         config_grid.addWidget(self.lbl_kp_x, 2, 4)
 
         config_grid.addWidget(QLabel("POSITION KD:"), 3, 2)
@@ -582,7 +604,9 @@ class MainWindow(QMainWindow):
         config_grid.addWidget(self.sl_kd_x, 3, 3)
         self.lbl_kd_x = QLabel("-3.5")
         self.lbl_kd_x.setStyleSheet("font-family: 'Consolas'; min-width: 25px;")
+        
         self.sl_kd_x.valueChanged.connect(lambda v: self.lbl_kd_x.setText(f"{v/10.0:.1f}"))
+        self.sl_kd_x.sliderReleased.connect(self.send_pid_gains_to_serial)
         config_grid.addWidget(self.lbl_kd_x, 3, 4)
 
         config_grid.setColumnStretch(1, 1)
@@ -638,16 +662,13 @@ class MainWindow(QMainWindow):
         plot.setBackground('#000000')
         plot_item = plot.getPlotItem()
         
-        # Hide standard margins
         plot_item.setContentsMargins(0, 0, 0, 0)
         plot_item.showGrid(x=True, y=True, alpha=0.08)
 
-        # Hide X bottom axis for technical dense look
         plot_item.showAxis('bottom', False)
         plot_item.showAxis('right', False)
         plot_item.showAxis('top', False)
 
-        # Customize Y axis tick marks
         left_axis = plot_item.getAxis('left')
         left_axis.setPen(pg.mkPen('#333333', width=1))
         left_axis.setTextPen(pg.mkPen('#888888'))
@@ -657,30 +678,30 @@ class MainWindow(QMainWindow):
         left_axis.setTickFont(font)
         plot_item.setYRange(y_min, y_max)
 
-        # Connect a white filled path item
         curve = plot_item.plot(
             pen=pg.mkPen('#ffffff', width=1.5),
-            fillLevel=y_min - 100.0, # ensures filling to the bottom limit
+            fillLevel=y_min - 100.0,
             fillBrush=pg.mkBrush(fill_color)
         )
         return curve
 
     # ---------------------------------------------------------
-    # Thread Connection Controls
+    # Telemetry and Connection Controls
     # ---------------------------------------------------------
     def on_mode_changed(self, mode):
-        self.is_simulation = (mode == "Simulation")
+        self.is_simulation = (mode == "Simulation Fallback")
         self.btn_connect.setEnabled(not self.is_simulation)
-        self.btn_push.setEnabled(self.is_simulation)
         self.lbl_telemetry.setText(f"Time: {self.elapsed_time:.1f}s | Mode: {'SIM' if self.is_simulation else 'HW'}")
         
-        if not self.is_simulation:
-            # Pause simulation if switching to HW
+        if self.is_simulation:
+            # Stop serial
+            self.stop_serial()
+            self.btn_start.setText("Start")
+        else:
+            # HW mode
             if self.is_running:
                 self.toggle_running()
-        else:
-            # Terminate active serial reader when entering SIM
-            self.stop_serial()
+            self.btn_start.setText("Start Link")
 
     def toggle_connection(self):
         if self.serial_thread and self.serial_thread.isRunning():
@@ -692,12 +713,12 @@ class MainWindow(QMainWindow):
         self.stop_serial()
         port = self.cb_port.currentText()
         if not port:
-            self.set_status_indicator("No COM Port selected", "red")
+            self.set_status_indicator("No Port", "red")
             return
         
         baud = int(self.cb_baud.currentText())
         self.serial_thread = SerialReader(port, baud)
-        self.serial_thread.data_received.connect(self.on_serial_data)
+        self.serial_thread.telemetry_received.connect(self.on_hardware_telemetry)
         self.serial_thread.status_changed.connect(self.set_status_indicator)
         self.serial_thread.start()
         self.btn_connect.setText("Disconnect")
@@ -715,9 +736,9 @@ class MainWindow(QMainWindow):
         self.status_text.setText(text)
         
         color_map = {
-            "green": "#ffffff", # Running/Active
-            "gray": "#555555",  # Idle
-            "red": "#ff3333"    # Error
+            "green": "#ffffff", # Connected/Active
+            "gray": "#555555",  # Disconnected
+            "red": "#ff3333"    # Fault
         }
         self.status_dot.setStyleSheet(f"""
             border: 1px solid #ffffff;
@@ -725,32 +746,35 @@ class MainWindow(QMainWindow):
             background-color: {color_map.get(state, '#555555')};
         """)
 
-        # Change Start button context if COM reading
-        if text.startswith("Reading"):
-            self.btn_start.setText("Stop")
+        # Sync Start button text when Serial reader is active
+        if text.startswith("Connected"):
+            self.btn_start.setText("Stop Link")
             self.is_running = True
         elif text == "Idle":
-            self.btn_start.setText("Start")
+            self.btn_start.setText("Start Link" if not self.is_simulation else "Start")
             self.is_running = False
 
-    def on_serial_data(self, value):
-        # Update raw values.
-        # Expecting value represents angle in degrees (with 180 as vertical upright)
-        # Convert to physics domain radians where 0 is upright
-        self.theta = math.radians(value - 180.0)
-        self.elapsed_time += self.dt
-        
-        # In HW mode, we do not calculate force control outputs directly
-        self.force = 0.0
-        self.x = 0.0 # Cart stays centered since it's hardware
-        self.theta_dot = 0.0
+    def on_hardware_telemetry(self, theta_deg, pos, force):
+        # Update current values directly from physical pendulum inputs
+        self.theta = math.radians(theta_deg - 180.0)
+        self.x = pos
+        self.force = force
 
-    # ---------------------------------------------------------
-    # Physics Loop Ticks
-    # ---------------------------------------------------------
+    def send_pid_gains_to_serial(self):
+        # On slider release, send PID gain command packets over serial to Microcontroller
+        if not self.is_simulation and self.serial_thread and self.serial_thread.isRunning():
+            kp_theta = self.sl_kp_theta.value()
+            kd_theta = self.sl_kd_theta.value()
+            kp_x = self.sl_kp_x.value() / 10.0
+            kd_x = self.sl_kd_x.value() / 10.0
+            
+            # Format standard comma separated message: e.g. "PID:60.0,15.0,-2.50,-3.50\n"
+            cmd = f"PID:{kp_theta:.1f},{kd_theta:.1f},{kp_x:.2f},{kd_x:.2f}\n"
+            self.serial_thread.write_data(cmd)
+
     def toggle_running(self):
         if not self.is_simulation:
-            # If HW mode, clicking start initiates serial connection
+            # Toggles connection link directly
             self.toggle_connection()
             return
 
@@ -759,31 +783,28 @@ class MainWindow(QMainWindow):
         self.set_status_indicator("Running" if self.is_running else "Paused", "green" if self.is_running else "gray")
 
     def reset_all(self):
-        # Stop
         if self.is_running:
             self.toggle_running()
         self.stop_serial()
         
-        # Reset variables
+        # Reset local values
         self.x = 0.0
         self.x_dot = 0.0
-        self.theta = math.radians(random.choice([-1, 1]) * random.uniform(2.0, 10.0)) # start slightly off vertical upright
+        self.theta = math.radians(random.choice([-1, 1]) * random.uniform(2.0, 10.0))
         self.theta_dot = 0.0
         self.force = 0.0
         self.elapsed_time = 0.0
         self.fallen_frames = 0
 
-        # Clear histories
+        # Reset graphs histories
         self.angle_history = deque([180.0] * self.history_len, maxlen=self.history_len)
         self.pos_history = deque([0.0] * self.history_len, maxlen=self.history_len)
         self.force_history = deque([0.0] * self.history_len, maxlen=self.history_len)
 
-        # Clear plots
         self.angle_curve.setData(list(self.angle_history))
         self.pos_curve.setData(list(self.pos_history))
         self.force_curve.setData(list(self.force_history))
 
-        # Update visuals
         self.canvas_widget.update_state(self.x, self.theta, self.force)
         self.nn_widget.update_state(self.force, self.elapsed_time)
         self.lbl_telemetry.setText(f"Time: {self.elapsed_time:.1f}s | Mode: {'SIM' if self.is_simulation else 'HW'}")
@@ -791,9 +812,14 @@ class MainWindow(QMainWindow):
     def apply_push(self, magnitude):
         if self.is_simulation:
             self.x_dot += magnitude
+        else:
+            # Send physical disturbance impulse to controller MCU over serial
+            if self.serial_thread and self.serial_thread.isRunning():
+                cmd = f"PUSH:{magnitude:.1f}\n"
+                self.serial_thread.write_data(cmd)
 
     def reset_simulation_state(self):
-        # Soft-reset simulation state when it crashes/falls over (continuity)
+        # Continuity reset (simulation fallback only)
         self.x = random.uniform(-1.0, 1.0)
         self.x_dot = 0.0
         self.theta = math.radians(random.choice([-1, 1]) * random.uniform(5.0, 15.0))
@@ -801,19 +827,20 @@ class MainWindow(QMainWindow):
         self.force = 0.0
         self.fallen_frames = 0
 
+    # ---------------------------------------------------------
+    # Core Loop tick
+    # ---------------------------------------------------------
     def tick(self):
         if self.is_running:
             if self.is_simulation:
                 # -----------------
-                # Physics Step
+                # Simulation Math
                 # -----------------
-                # Fetch controller tuning parameters
                 kp_theta = self.sl_kp_theta.value()
                 kd_theta = self.sl_kd_theta.value()
                 kp_x = self.sl_kp_x.value() / 10.0
                 kd_x = self.sl_kd_x.value() / 10.0
 
-                # Border limits safety wall repulsions
                 wall_repulsion = 0.0
                 margin = 1.2
                 if self.x > margin:
@@ -821,25 +848,19 @@ class MainWindow(QMainWindow):
                 elif self.x < -margin:
                     wall_repulsion = -60.0 * (self.x + margin) - 15.0 * self.x_dot
 
-                # Map angle to [-pi, pi] normalized
                 norm_theta = ((self.theta % (2 * math.pi)) + 2 * math.pi) % (2 * math.pi)
                 if norm_theta > math.pi:
                     norm_theta -= 2 * math.pi
 
-                # Control output calculation
                 if abs(norm_theta) < 0.5:
-                    # Balance control
                     self.force = (kp_theta * norm_theta) + (kd_theta * self.theta_dot) + (kp_x * self.x) + (kd_x * self.x_dot) + wall_repulsion
                 else:
-                    # Swing up energy control
                     self.force = -60.0 * math.copysign(1, self.theta_dot * math.cos(norm_theta)) - 2.0 * self.x - 2.0 * self.x_dot + wall_repulsion
                     if abs(self.theta_dot) < 0.01 and abs(norm_theta) > math.pi - 0.1:
-                        self.force = 20.0 # start perturbation
+                        self.force = 20.0
 
-                # Cap absolute control force
                 self.force = max(-30.0, min(30.0, self.force))
 
-                # Dynamic equations of motion
                 sin_t = math.sin(self.theta)
                 cos_t = math.cos(self.theta)
                 
@@ -847,17 +868,16 @@ class MainWindow(QMainWindow):
                 theta_acc = (self.g * sin_t - cos_t * temp) / (self.L * (4.0/3.0 - self.m * cos_t * cos_t / (self.M + self.m)))
                 x_acc = temp - self.m * self.L * theta_acc * cos_t / (self.M + self.m)
 
-                # Integrate Euler-Cromer
                 self.x_dot += x_acc * self.dt
                 self.x += self.x_dot * self.dt
                 self.theta_dot += theta_acc * self.dt
-                self.theta_dot *= 0.995 # friction damping
+                self.theta_dot *= 0.995
 
                 max_spin = 12.0
                 self.theta_dot = max(-max_spin, min(max_spin, self.theta_dot))
                 self.theta += self.theta_dot * self.dt
 
-                # Prevent cart from exiting physical track boundaries
+                # Limits
                 rail_limit = 2.4
                 if self.x > rail_limit:
                     self.x = rail_limit
@@ -866,7 +886,6 @@ class MainWindow(QMainWindow):
                     self.x = -rail_limit
                     if self.x_dot < 0: self.x_dot = 0.0
 
-                # Detect fallback reset condition
                 if abs(norm_theta) > math.pi / 2.0:
                     self.fallen_frames += 1
                     if self.fallen_frames > 200:
@@ -874,25 +893,22 @@ class MainWindow(QMainWindow):
                 else:
                     self.fallen_frames = 0
 
-                self.elapsed_time += self.dt
+            self.elapsed_time += self.dt
 
-            # Update histories at decimation frequency (every 4 ticks ~32ms)
+            # Buffer histories at decimation frequency (every 4 ticks ~32ms)
             if int(self.elapsed_time / self.dt) % 4 == 0:
-                # Map radians back to display degrees (180 center)
                 display_deg = 180.0 + math.degrees(self.theta)
                 self.angle_history.append(display_deg)
                 self.pos_history.append(self.x)
                 self.force_history.append(self.force)
 
-                # Replot curves
                 self.angle_curve.setData(list(self.angle_history))
                 self.pos_curve.setData(list(self.pos_history))
                 self.force_curve.setData(list(self.force_history))
 
-            # Update dashboard overlay readouts
             self.lbl_telemetry.setText(f"Time: {self.elapsed_time:.1f}s | Mode: {'SIM' if self.is_simulation else 'HW'}")
 
-        # Update visuals continuously (smooth animation at ~120fps)
+        # Smooth repaint overlays at window rate
         self.canvas_widget.update_state(self.x, self.theta, self.force)
         self.nn_widget.update_state(self.force, self.elapsed_time)
 
