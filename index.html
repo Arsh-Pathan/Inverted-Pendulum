@@ -7,7 +7,7 @@ import os
 from collections import deque
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QHBoxLayout, 
                              QVBoxLayout, QGridLayout, QLabel, QSplitter)
-from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal, QPointF
+from PyQt6.QtCore import QTimer, Qt, QPointF
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QFont, QPolygonF
 import pyqtgraph as pg
 import serial
@@ -56,59 +56,6 @@ QLabel {
     color: #000000;
 }
 """
-
-# ---------------------------------------------------------
-# Multi-variable Serial Reader QThread
-# ---------------------------------------------------------
-class SerialReader(QThread):
-    telemetry_received = pyqtSignal(float, float, float)
-    status_changed = pyqtSignal(str, str)
-
-    def __init__(self, port, baud=115200):
-        super().__init__()
-        self.port = port
-        self.baud = baud
-        self.running = False
-        self.ser = None
-
-    def run(self):
-        self.running = True
-        try:
-            self.ser = serial.Serial(self.port, self.baud, timeout=0.1)
-            self.status_changed.emit(f"Connected: {self.port}", "green")
-            self.ser.reset_input_buffer()
-            
-            while self.running:
-                try:
-                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                    if line:
-                        parts = line.split(',')
-                        if len(parts) >= 3:
-                            theta_deg = float(parts[0])
-                            pos = float(parts[1])
-                            force = float(parts[2])
-                            self.telemetry_received.emit(theta_deg, pos, force)
-                        elif len(parts) == 2:
-                            theta_deg = float(parts[0])
-                            pos = float(parts[1])
-                            self.telemetry_received.emit(theta_deg, pos, 0.0)
-                        elif len(parts) == 1:
-                            theta_deg = float(parts[0])
-                            self.telemetry_received.emit(theta_deg, 0.0, 0.0)
-                except ValueError:
-                    pass
-                self.msleep(2)
-            self.ser.close()
-            self.ser = None
-            self.status_changed.emit("Idle", "gray")
-        except Exception as e:
-            print(f"[COM] Connection failed on {self.port}: {e}")
-            self.status_changed.emit("Disconnected", "red")
-            self.ser = None
-
-    def stop(self):
-        self.running = False
-        self.wait()
 
 # ---------------------------------------------------------
 # Card Container matching dashboard styles (White Theme)
@@ -281,7 +228,7 @@ class MainWindow(QMainWindow):
         self.force = 0.0
         self.elapsed_time = 0.0
 
-        self.serial_thread = None
+        self.ser = None
         self.is_connected = False
 
         # Charts history
@@ -298,11 +245,11 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.tick)
         self.timer.start(8)
 
-        # Background connection checker
+        # Background connection checker (polls every 1.5 seconds)
         self.port_timer = QTimer()
-        self.port_timer.timeout.connect(self.auto_connection_handler)
+        self.port_timer.timeout.connect(self.try_open_serial)
         self.port_timer.start(1500)
-        self.auto_connection_handler()
+        self.try_open_serial()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -377,7 +324,7 @@ class MainWindow(QMainWindow):
         self.sim_card.layout.addLayout(status_row)
         left_layout.addWidget(self.sim_card, 1)
 
-        # Right Panel: Telemetry Charts (Neural Network removed, cards expanded)
+        # Right Panel: Telemetry Charts
         right_widget = QWidget()
         right_widget.setFixedWidth(380)
         right_layout = QVBoxLayout(right_widget)
@@ -418,8 +365,6 @@ class MainWindow(QMainWindow):
         plot.setBackground('#ffffff')
         plot_item = plot.getPlotItem()
         plot_item.setContentsMargins(0, 0, 0, 0)
-        
-        # Grid settings (Light gray on white background)
         plot_item.showGrid(x=True, y=True, alpha=0.1)
 
         plot_item.showAxis('bottom', False)
@@ -435,7 +380,6 @@ class MainWindow(QMainWindow):
         left_axis.setTickFont(font)
         plot_item.setYRange(y_min, y_max)
 
-        # Plot curve (Black line on white background)
         curve = plot_item.plot(
             pen=pg.mkPen('#000000', width=1.5),
             fillLevel=y_min - 100.0,
@@ -446,34 +390,41 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------
     # Automatic plug-and-play connection scanner
     # ---------------------------------------------------------
-    def auto_connection_handler(self):
-        if self.serial_thread and self.serial_thread.isRunning():
-            return
+    def try_open_serial(self):
+        if self.ser and self.ser.is_open:
+            return True
 
         ports = [p.device for p in serial.tools.list_ports.comports()]
         target_port = self.config.get("preferred_port", "COM3")
         
         if not ports:
             self.set_status_indicator("Searching...", "gray")
-            return
+            return False
 
         chosen_port = target_port if target_port in ports else ports[0]
         baud = self.config.get("baud_rate", 115200)
 
-        print(f"[COM] Device detected. Attempting auto-connection on {chosen_port} ({baud} baud)...")
-        self.serial_thread = SerialReader(chosen_port, baud)
-        self.serial_thread.telemetry_received.connect(self.on_hardware_telemetry)
-        self.serial_thread.status_changed.connect(self.set_status_indicator)
-        self.serial_thread.start()
+        try:
+            # Open with timeout=0.001 exactly like your working code script
+            self.ser = serial.Serial(chosen_port, baud, timeout=0.001)
+            self.set_status_indicator(f"Connected: {chosen_port}", "green")
+            self.ser.reset_input_buffer()
+            print(f"[COM] Successfully connected to {chosen_port} at {baud} baud.")
+            return True
+        except Exception as e:
+            print(f"[COM] Connection failed on {chosen_port}: {e}")
+            self.set_status_indicator("Disconnected", "red")
+            self.ser = None
+            return False
 
     def set_status_indicator(self, text, state):
         self.status_text.setText(text)
         self.is_connected = (state == "green")
         
         color_map = {
-            "green": "#00aa00", # Connected (Green)
-            "gray": "#888888",  # Scanning (Gray)
-            "red": "#ff3333"    # Lost / Disconnected (Red)
+            "green": "#00aa00",
+            "gray": "#888888",
+            "red": "#ff3333"
         }
         self.status_dot.setStyleSheet(f"""
             border: 1px solid #000000;
@@ -481,18 +432,7 @@ class MainWindow(QMainWindow):
             background-color: {color_map.get(state, '#888888')};
         """)
 
-        # Console connection logging
-        if state == "green" and self.serial_thread:
-            print(f"[COM] Successfully connected to {self.serial_thread.port} at {self.config.get('baud_rate', 115200)} baud.")
-        elif state == "red":
-            print(f"[COM] Connection lost or port error on {self.serial_thread.port if self.serial_thread else 'device'}. Retrying in background...")
-
-        if state == "red":
-            if self.serial_thread:
-                self.serial_thread.stop()
-                self.serial_thread = None
-
-    def on_hardware_telemetry(self, theta_deg, pos, force):
+    def update_telemetry(self, theta_deg, pos, force):
         offset = self.config.get("angle_offset", 180.0)
         scale = self.config.get("angle_scale", 1.0)
         invert = -1.0 if self.config.get("angle_invert", False) else 1.0
@@ -507,6 +447,34 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------
     def tick(self):
         self.elapsed_time += self.dt
+
+        # Read serial data directly from port if connected
+        if self.ser and self.ser.is_open:
+            try:
+                while self.ser.in_waiting:
+                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                    if line:
+                        parts = line.split(',')
+                        if len(parts) >= 3:
+                            theta_deg = float(parts[0])
+                            pos = float(parts[1])
+                            force = float(parts[2])
+                            self.update_telemetry(theta_deg, pos, force)
+                        elif len(parts) == 2:
+                            theta_deg = float(parts[0])
+                            pos = float(parts[1])
+                            self.update_telemetry(theta_deg, pos, 0.0)
+                        elif len(parts) == 1:
+                            theta_deg = float(parts[0])
+                            self.update_telemetry(theta_deg, 0.0, 0.0)
+            except Exception as e:
+                print(f"[COM] Serial read error: {e}")
+                try:
+                    self.ser.close()
+                except:
+                    pass
+                self.ser = None
+                self.set_status_indicator("Disconnected", "red")
 
         # Calculate angular velocity
         diff = self.theta - self.prev_theta
@@ -533,7 +501,7 @@ class MainWindow(QMainWindow):
         if self.is_connected:
             self.lbl_telemetry.setText(
                 f"Time: {self.elapsed_time:.1f}s | Angle: {display_deg:.2f}° | "
-                f"Vel: {vel_deg_s:.1f}°/s | Port: {self.serial_thread.port if self.serial_thread else 'N/A'}"
+                f"Vel: {vel_deg_s:.1f}°/s | Port: {self.ser.port if self.ser else 'N/A'}"
             )
         else:
             self.lbl_telemetry.setText(
@@ -544,8 +512,11 @@ class MainWindow(QMainWindow):
         self.canvas_widget.update_state(self.x, self.theta, self.force)
 
     def closeEvent(self, event):
-        if self.serial_thread:
-            self.serial_thread.stop()
+        if self.ser:
+            try:
+                self.ser.close()
+            except:
+                pass
         event.accept()
 
 if __name__ == "__main__":
