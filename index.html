@@ -5,7 +5,7 @@ import json
 import os
 from collections import deque
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QHBoxLayout, 
-                             QVBoxLayout, QLabel, QSplitter)
+                             QVBoxLayout, QGridLayout, QLabel, QSplitter)
 from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal, QPointF
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QFont
 import pyqtgraph as pg
