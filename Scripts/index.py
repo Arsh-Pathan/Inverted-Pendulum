@@ -4,8 +4,9 @@ import time
 import json
 import os
 import numpy as np
+from queue import Queue
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QHBoxLayout, 
-                             QVBoxLayout, QGridLayout, QLabel, QSplitter)
+                             QVBoxLayout, QGridLayout, QLabel, QSplitter, QPushButton, QSpinBox, QDoubleSpinBox)
 from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal, QPointF
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QFont
 import pyqtgraph as pg
@@ -68,34 +69,42 @@ class SerialReader(QThread):
         self.port = port
         self.baud = baud
         self.running = False
+        self.cmd_queue = Queue()
 
     def run(self):
         self.running = True
         try:
-            # Open WITHOUT asserting DTR/RTS to prevent the ESP32 auto-reset circuit
-            # from rebooting the microcontroller (DTR high → EN pin reset pulse).
-            # This matches Arduino Serial Monitor behaviour: connect to an already-running board.
-            ser = serial.Serial()
-            ser.write_timeout = 0
-            ser.port = self.port
-            ser.baudrate = self.baud
-            ser.timeout = 0.05
-            ser.dtr = False
-            ser.rts = False
-            ser.open()
-            print(f"[COM] Serial port {self.port} opened successfully (baud={self.baud}, timeout=0.1s, DTR=False)")
+            self.ser = serial.Serial()
+            self.ser.write_timeout = 0.05
+            self.ser.port = self.port
+            self.ser.baudrate = self.baud
+            self.ser.timeout = 0.01  # short timeout to prevent blocking the command loop
+            self.ser.dtr = False
+            self.ser.rts = False
+            self.ser.open()
+            print(f"[COM] Serial port {self.port} opened successfully (baud={self.baud}, timeout=0.01s, DTR=False)")
             self.status_changed.emit(f"Connected: {self.port}", "green")
 
-            # Flush any partial data sitting in the OS buffer and discard the first
-            # (potentially incomplete) line so we start on a clean line boundary.
-            ser.reset_input_buffer()
-            ser.readline()
+            self.ser.reset_input_buffer()
+            self.ser.readline()
             print("[COM] Input buffer reset, first partial line discarded. Entering read loop...")
 
             while self.running:
-                raw = ser.readline()          # blocks up to 0.1s for a '\n'
+                # Process any pending write commands from the GUI thread
+                while not self.cmd_queue.empty() and self.running:
+                    cmd = self.cmd_queue.get()
+                    print(f"[COM Thread] Attempting to write command to serial: {cmd.strip()}")
+                    try:
+                        self.ser.write(cmd.encode('utf-8'))
+                        self.ser.flush()
+                        print(f"[COM Thread] Successfully wrote command: {cmd.strip()}")
+                    except Exception as e:
+                        print(f"[COM Thread] Failed to send command: {e}")
+
+                # Read telemetry
+                raw = self.ser.readline()
                 if not raw:
-                    continue                  # timeout with no data – just retry
+                    continue
 
                 try:
                     line = raw.decode('utf-8', errors='ignore').strip()
@@ -104,7 +113,7 @@ class SerialReader(QThread):
                     continue
 
                 if not line:
-                    continue                  # blank line (e.g. lone \r\n)
+                    continue
 
                 try:
                     value = float(line)
@@ -114,7 +123,7 @@ class SerialReader(QThread):
 
                 self.angle_received.emit(value)
 
-            ser.close()
+            self.ser.close()
             print("[COM] Serial port closed normally.")
             self.status_changed.emit("Idle", "gray")
 
@@ -127,7 +136,11 @@ class SerialReader(QThread):
 
     def stop(self):
         self.running = False
-        self.wait(2000)  # wait up to 2s so readline() can finish its current timeout
+        self.wait(2000)
+
+    def send_command(self, cmd):
+        print(f"[GUI Thread] Queueing command: {cmd.strip()}")
+        self.cmd_queue.put(cmd)
 
 # ---------------------------------------------------------
 # Card Container matching dashboard styles
@@ -265,7 +278,7 @@ class CanvasWidget(QWidget):
         # Pendulum Rod (Black)
         pole_len = 160
         px = cx + math.sin(self.theta) * pole_len
-        py = cy - math.cos(self.theta) * pole_len
+        py = cy + math.cos(self.theta) * pole_len
 
         painter.setPen(QPen(QColor(0, 0, 0), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
         painter.drawLine(QPointF(cx, cy), QPointF(px, py))
@@ -287,8 +300,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Inverted Pendulum Telemetry Monitor")
-        self.resize(1400, 850)
+        self.resize(1600, 900)
         self.setStyleSheet(QSS_STYLE)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # Load configurations
         self.config = load_config()
@@ -415,29 +429,178 @@ class MainWindow(QMainWindow):
 
         # Right Panel: Telemetry Charts and Text Displays
         right_widget = QWidget()
-        right_widget.setFixedWidth(420)
+        right_widget.setFixedWidth(600)
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
         splitter.addWidget(right_widget)
+
+        # ── Motor Control Card ──
+        ctrl_card = CardWidget("MOTOR CONTROL")
+        ctrl_layout = QVBoxLayout()
+        ctrl_layout.setSpacing(10)
+        
+        # Row 1: Start/Stop Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        self.btn_start = QPushButton("START")
+        self.btn_start.setStyleSheet("""
+            QPushButton {
+                background-color: #2ecc71; color: white; font-weight: bold; font-size: 16px;
+                border: none; border-radius: 4px; padding: 12px;
+            }
+            QPushButton:hover { background-color: #27ae60; }
+            QPushButton:pressed { background-color: #1e8449; }
+        """)
+        self.btn_start.clicked.connect(lambda: self.send_motor_command("1\n"))
+        
+        self.btn_stop = QPushButton("STOP")
+        self.btn_stop.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c; color: white; font-weight: bold; font-size: 16px;
+                border: none; border-radius: 4px; padding: 12px;
+            }
+            QPushButton:hover { background-color: #c0392b; }
+            QPushButton:pressed { background-color: #922b21; }
+        """)
+        self.btn_stop.clicked.connect(lambda: self.send_motor_command("0\n"))
+        
+        btn_layout.addWidget(self.btn_start)
+        btn_layout.addWidget(self.btn_stop)
+        ctrl_layout.addLayout(btn_layout)
+
+        # Row 1.5: Auto-Balance Button
+        balance_layout = QHBoxLayout()
+        self.btn_balance = QPushButton("Start Auto-Balance")
+        self.btn_balance.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db; color: white; font-weight: bold; font-size: 16px;
+                border: none; border-radius: 4px; padding: 12px;
+            }
+            QPushButton:hover { background-color: #2980b9; }
+        """)
+        self.btn_balance.clicked.connect(self.toggle_balance)
+        self.is_balancing = False
+        balance_layout.addWidget(self.btn_balance)
+        ctrl_layout.addLayout(balance_layout)
+
+        # Row 2: Settings (Speed and Distance)
+        settings_layout = QGridLayout()
+        settings_layout.setSpacing(6)
+        
+        small_title_style = "font-size: 10px; font-weight: 800; color: #555555;"
+        spinbox_style = """
+            QSpinBox {
+                font-family: 'Consolas', monospace;
+                font-size: 14px; font-weight: bold;
+                color: #000000; background: #f5f5f5;
+                border: 1px solid #cccccc; border-radius: 4px;
+                padding: 4px 6px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button { width: 18px; }
+        """
+        
+        lbl_speed = QLabel("SPEED (0-255):")
+        lbl_speed.setStyleSheet(small_title_style)
+        self.spin_speed = QSpinBox()
+        self.spin_speed.setRange(0, 255)
+        self.spin_speed.setValue(255)
+        self.spin_speed.setStyleSheet(spinbox_style)
+        self.spin_speed.valueChanged.connect(lambda v: self.send_motor_command(f"P,{v}\n"))
+        
+        lbl_dist = QLabel("DISTANCE (ms):")
+        lbl_dist.setStyleSheet(small_title_style)
+        self.spin_dist = QSpinBox()
+        self.spin_dist.setRange(10, 2000)
+        self.spin_dist.setSingleStep(50)
+        self.spin_dist.setValue(400)
+        self.spin_dist.setStyleSheet(spinbox_style)
+        self.spin_dist.valueChanged.connect(lambda v: self.send_motor_command(f"D,{v}\n"))
+
+        settings_layout.addWidget(lbl_speed, 0, 0)
+        settings_layout.addWidget(self.spin_speed, 1, 0)
+        settings_layout.addWidget(lbl_dist, 0, 1)
+        settings_layout.addWidget(self.spin_dist, 1, 1)
+        
+        ctrl_layout.addLayout(settings_layout)
+
+        # Row 3: PID Tuning (Kp, Ki, Kd)
+        pid_layout = QHBoxLayout()
+        pid_layout.setSpacing(10)
+        
+        double_spinbox_style = """
+            QDoubleSpinBox {
+                font-family: 'Consolas', monospace;
+                font-size: 13px; font-weight: bold;
+                color: #000000; background: #f5f5f5;
+                border: 1px solid #cccccc; border-radius: 4px;
+                padding: 4px 6px;
+            }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 16px; }
+        """
+        
+        # KP
+        kp_widget = QWidget()
+        kp_vbox = QVBoxLayout(kp_widget)
+        kp_vbox.setContentsMargins(0, 0, 0, 0)
+        kp_vbox.setSpacing(2)
+        lbl_kp = QLabel("KP (PROPORTIONAL):")
+        lbl_kp.setStyleSheet(small_title_style)
+        self.spin_kp = QDoubleSpinBox()
+        self.spin_kp.setRange(0.0, 100.0)
+        self.spin_kp.setSingleStep(0.5)
+        self.spin_kp.setValue(15.0)
+        self.spin_kp.setStyleSheet(double_spinbox_style)
+        self.spin_kp.valueChanged.connect(lambda v: self.send_motor_command(f"KP,{v:.2f}\n"))
+        kp_vbox.addWidget(lbl_kp)
+        kp_vbox.addWidget(self.spin_kp)
+        pid_layout.addWidget(kp_widget)
+        
+        # KI
+        ki_widget = QWidget()
+        ki_vbox = QVBoxLayout(ki_widget)
+        ki_vbox.setContentsMargins(0, 0, 0, 0)
+        ki_vbox.setSpacing(2)
+        lbl_ki = QLabel("KI (INTEGRAL):")
+        lbl_ki.setStyleSheet(small_title_style)
+        self.spin_ki = QDoubleSpinBox()
+        self.spin_ki.setRange(0.0, 50.0)
+        self.spin_ki.setSingleStep(0.05)
+        self.spin_ki.setValue(0.0)
+        self.spin_ki.setStyleSheet(double_spinbox_style)
+        self.spin_ki.valueChanged.connect(lambda v: self.send_motor_command(f"KI,{v:.2f}\n"))
+        ki_vbox.addWidget(lbl_ki)
+        ki_vbox.addWidget(self.spin_ki)
+        pid_layout.addWidget(ki_widget)
+        
+        # KD
+        kd_widget = QWidget()
+        kd_vbox = QVBoxLayout(kd_widget)
+        kd_vbox.setContentsMargins(0, 0, 0, 0)
+        kd_vbox.setSpacing(2)
+        lbl_kd = QLabel("KD (DERIVATIVE):")
+        lbl_kd.setStyleSheet(small_title_style)
+        self.spin_kd = QDoubleSpinBox()
+        self.spin_kd.setRange(0.0, 50.0)
+        self.spin_kd.setSingleStep(0.1)
+        self.spin_kd.setValue(2.5)
+        self.spin_kd.setStyleSheet(double_spinbox_style)
+        self.spin_kd.valueChanged.connect(lambda v: self.send_motor_command(f"KD,{v:.2f}\n"))
+        kd_vbox.addWidget(lbl_kd)
+        kd_vbox.addWidget(self.spin_kd)
+        pid_layout.addWidget(kd_widget)
+        
+        ctrl_layout.addLayout(pid_layout)
+        ctrl_card.layout.addLayout(ctrl_layout)
+        right_layout.addWidget(ctrl_card)
 
         # ── Metrics Card ──
         readout_card = CardWidget("LIVE METRICS")
         readout_grid = QGridLayout()
         readout_grid.setSpacing(6)
         big_val_style = "font-size: 32px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
-        small_title_style = "font-size: 10px; font-weight: 800; color: #555555;"
         small_val_style = "font-size: 16px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
-        spinbox_style = """
-            QDoubleSpinBox {
-                font-family: 'Consolas', monospace;
-                font-size: 14px; font-weight: bold;
-                color: #000000; background: #f5f5f5;
-                border: 1px solid #cccccc; border-radius: 4px;
-                padding: 2px 6px;
-            }
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 18px; }
-        """
 
         # Row 0-1: Deviation angle (big)
         lbl_dev_title = QLabel("DEVIATION FROM ZERO:")
@@ -504,7 +667,7 @@ class MainWindow(QMainWindow):
         self.vel_card.layout.addWidget(self.vel_plot)
         right_layout.addWidget(self.vel_card, 1)
 
-        splitter.setSizes([950, 420])
+        splitter.setSizes([1000, 600])
 
     def style_chart(self, plot, y_label='Value', y_unit='', line_color='#000000'):
         plot.setBackground('#ffffff')
@@ -584,7 +747,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _wrap_180(deg):
         """Wrap an angle into the -180 … +180 range."""
-        return (deg + 180.0) % 360.0 - 180.0
+        return (deg + 180.0) % 360.0
 
     def on_angle_received(self, raw_angle):
         current_time = time.time()
@@ -595,9 +758,7 @@ class MainWindow(QMainWindow):
 
         self.raw_angle = raw_angle
 
-        # Deviation from offset, wrapped to -180…+180 → clean sine wave
-        offset = self.config.get("angle_offset", 180.0)
-        self.angle_dev = self._wrap_180(raw_angle - offset)
+        self.angle_dev = self._wrap_180(raw_angle)
 
         # Wrap-aware velocity: handles the 0/360 boundary correctly
         if self.prev_raw is not None and dt > 0:
@@ -645,6 +806,13 @@ class MainWindow(QMainWindow):
         return t, a, v
 
     # ---------------------------------------------------------
+    # Actions
+    # ---------------------------------------------------------
+    def send_motor_command(self, cmd):
+        if self.serial_thread:
+            self.serial_thread.send_command(cmd)
+
+    # ---------------------------------------------------------
     # Fast tick: canvas + labels (~60 FPS)
     # ---------------------------------------------------------
     def tick_fast(self):
@@ -686,6 +854,46 @@ class MainWindow(QMainWindow):
         if self.serial_thread:
             self.serial_thread.stop()
         event.accept()
+
+    def keyPressEvent(self, event):
+        if event.isAutoRepeat():
+            return
+        print(f"[GUI Event] Key Pressed: {event.key()}")
+        if event.key() == Qt.Key.Key_A:
+            self.send_motor_command("B\n")
+        elif event.key() == Qt.Key.Key_D:
+            self.send_motor_command("F\n")
+
+    def keyReleaseEvent(self, event):
+        if event.isAutoRepeat():
+            return
+        print(f"[GUI Event] Key Released: {event.key()}")
+        if event.key() in (Qt.Key.Key_A, Qt.Key.Key_D):
+            self.send_motor_command("0\n")
+
+    def toggle_balance(self):
+        print(f"[GUI Event] Auto-Balance Button Toggled. Current State: {self.is_balancing}")
+        self.is_balancing = not self.is_balancing
+        if self.is_balancing:
+            self.send_motor_command("A\n")
+            self.btn_balance.setText("Stop Auto-Balance")
+            self.btn_balance.setStyleSheet("""
+                QPushButton {
+                    background-color: #9b59b6; color: white; font-weight: bold; font-size: 16px;
+                    border: none; border-radius: 4px; padding: 12px;
+                }
+                QPushButton:hover { background-color: #8e44ad; }
+            """)
+        else:
+            self.send_motor_command("0\n")
+            self.btn_balance.setText("Start Auto-Balance")
+            self.btn_balance.setStyleSheet("""
+                QPushButton {
+                    background-color: #3498db; color: white; font-weight: bold; font-size: 16px;
+                    border: none; border-radius: 4px; padding: 12px;
+                }
+                QPushButton:hover { background-color: #2980b9; }
+            """)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
