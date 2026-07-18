@@ -231,9 +231,9 @@ void loop() {
 
       // Flipped motor direction for the upright region to prevent anti-balancing
       if (output > 0) {
-        motorForward(speed);
       } else {
         motorReverse(speed);
+        motorForward(speed);
       }
     }
   }
