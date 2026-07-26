@@ -68,17 +68,16 @@ class MainWindow(QMainWindow):
             deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 6.0)
         )
         self.lqr_balancer = LQRBalancer(
-            q_angle=ctrl_cfg.get("q_angle", 100.0),
-            q_vel=ctrl_cfg.get("q_vel", 10.0),
-            r_gain=ctrl_cfg.get("r_gain", 1.0),
+            k_theta=ctrl_cfg.get("k_theta", 25.0),
+            k_omega=ctrl_cfg.get("k_omega", 3.5),
+            alpha=ctrl_cfg.get("alpha", 0.08),
             min_power=ctrl_cfg.get("min_motor_power", 45),
             max_power=ctrl_cfg.get("max_motor_power", 255),
             deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.4),
             deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 6.0)
         )
         self.hybrid_balancer = HybridBalancer(
-            min_power=ctrl_cfg.get("min_motor_power", 45),
-            max_power=ctrl_cfg.get("max_motor_power", 255)
+            stabilizer=self.pid_balancer
         )
         if RLBalancer is not None:
             self.rl_balancer = RLBalancer(model_path=None, min_power=45, max_power=255)
