@@ -8,7 +8,7 @@
     "encoder": {
         "angle_offset": 0.0,
         "angle_scale": 1.0,
-        "angle_invert": false
+        "angle_invert": true
     },
     "control": {
         "kp": 15.0,

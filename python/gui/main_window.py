@@ -117,8 +117,20 @@ class MainWindow(QMainWindow):
         self._buf_angle = np.zeros(self.history_len, dtype=np.float64)
         self._buf_vel = np.zeros(self.history_len, dtype=np.float64)
         self._buf_action = np.zeros(self.history_len, dtype=np.float64)
+        self._buf_reward = np.zeros(self.history_len, dtype=np.float64)
+        self._buf_cumreward = np.zeros(self.history_len, dtype=np.float64)
+        self._buf_iae = np.zeros(self.history_len, dtype=np.float64)
         self._buf_idx = 0
         self._buf_count = 0
+
+        # Running performance accumulators (control-quality analytics)
+        self._sum_sq_err = 0.0      # Σ θ_err²  → RMS error
+        self._sum_abs_err = 0.0     # Σ |θ_err| dt → IAE (integral absolute error)
+        self._sum_abs_pwm = 0.0     # Σ |PWM| → mean actuator effort
+        self._sum_reward = 0.0      # Σ instantaneous reward → cumulative reward
+        self._metric_n = 0          # sample count for averaging
+        self._balanced_n = 0        # samples within settling tolerance
+        self._settle_tol_deg = 2.0  # ±2° settling band
 
         # 4) Setup UI
         self.init_ui()
@@ -150,11 +162,12 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
 
-        # ── Left Panel: CAD Viewport & Status ──
+        # ── Left Sidebar: Header, CAD Viewport, Controls & Metrics (fixed width) ──
         left_widget = QWidget()
+        left_widget.setFixedWidth(600)
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(16)
+        left_layout.setSpacing(14)
         splitter.addWidget(left_widget)
 
         # Header Block
@@ -192,66 +205,77 @@ class MainWindow(QMainWindow):
         sim_card.layout.addLayout(status_row)
         left_layout.addWidget(sim_card, 1)
 
-        # ── Right Panel: Controls, Metrics & Tabbed Charts ──
+        # Control Panel (lives in the left sidebar beneath the viewport)
+        self.ctrl_panel = ControlPanel(self.config)
+        self._wire_control_panel()
+        left_layout.addWidget(self.ctrl_panel)
+
+        # ── Right Panel: Wide Charts & Metrics Area (stretches to fill window) ──
         right_widget = QWidget()
-        right_widget.setFixedWidth(640)
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
         splitter.addWidget(right_widget)
 
-        # Control Panel
-        self.ctrl_panel = ControlPanel(self.config)
-        self._wire_control_panel()
-        right_layout.addWidget(self.ctrl_panel)
-
-        # Live Metrics Card
-        metrics_card = CardWidget("LIVE HIL TELEMETRY METRICS")
+        # ── Live Metrics Card: wide horizontal strip atop the charts area ──
+        metrics_card = CardWidget("LIVE HIL TELEMETRY & CONTROL-QUALITY METRICS")
         readout_grid = QGridLayout()
         readout_grid.setSpacing(6)
-        big_style = "font-size: 26px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
-        small_style = "font-size: 14px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
+        readout_grid.setColumnStretch(0, 1)
+        readout_grid.setColumnStretch(1, 1)
+        readout_grid.setColumnStretch(2, 1)
+        readout_grid.setColumnStretch(3, 1)
+        big_style = "font-size: 30px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
+        small_style = "font-size: 15px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
         lbl_style = "font-size: 10px; font-weight: 800; color: #555555;"
 
-        lbl_dev_title = QLabel("DEVIATION FROM ZERO:")
-        lbl_dev_title.setStyleSheet(lbl_style)
+        def add_stat(row, col, title, init):
+            """Create a stacked (caption + value) readout cell and return the value label."""
+            cap = QLabel(title)
+            cap.setStyleSheet(lbl_style)
+            val = QLabel(init)
+            val.setStyleSheet(small_style)
+            box = QVBoxLayout()
+            box.setSpacing(1)
+            box.addWidget(cap)
+            box.addWidget(val)
+            readout_grid.addLayout(box, row, col)
+            return val
+
+        # Row 0: two large primary readouts spanning two columns each
+        dev_cap = QLabel("DEVIATION FROM ZERO")
+        dev_cap.setStyleSheet(lbl_style)
         self.lbl_angle_val = QLabel("0.00°")
         self.lbl_angle_val.setStyleSheet(big_style)
-        readout_grid.addWidget(lbl_dev_title, 0, 0, 1, 2)
-        readout_grid.addWidget(self.lbl_angle_val, 1, 0, 1, 2)
+        dev_box = QVBoxLayout(); dev_box.setSpacing(1)
+        dev_box.addWidget(dev_cap); dev_box.addWidget(self.lbl_angle_val)
+        readout_grid.addLayout(dev_box, 0, 0, 1, 2)
 
-        lbl_vel_title = QLabel("ANGULAR VELOCITY:")
-        lbl_vel_title.setStyleSheet(lbl_style)
+        vel_cap = QLabel("ANGULAR VELOCITY")
+        vel_cap.setStyleSheet(lbl_style)
         self.lbl_vel_val = QLabel("0.0°/s")
         self.lbl_vel_val.setStyleSheet(big_style)
-        readout_grid.addWidget(lbl_vel_title, 2, 0, 1, 2)
-        readout_grid.addWidget(self.lbl_vel_val, 3, 0, 1, 2)
+        vel_box = QVBoxLayout(); vel_box.setSpacing(1)
+        vel_box.addWidget(vel_cap); vel_box.addWidget(self.lbl_vel_val)
+        readout_grid.addLayout(vel_box, 0, 2, 1, 2)
 
-        lbl_act_title = QLabel("MOTOR ACTION (PWM):")
-        lbl_act_title.setStyleSheet(lbl_style)
-        self.lbl_action_val = QLabel("0 [COAST]")
-        self.lbl_action_val.setStyleSheet(small_style)
-        lbl_rate = QLabel("SAMPLE RATE:")
-        lbl_rate.setStyleSheet(lbl_style)
-        self.lbl_rate_val = QLabel("— Hz")
-        self.lbl_rate_val.setStyleSheet(small_style)
-        readout_grid.addWidget(lbl_act_title, 4, 0)
-        readout_grid.addWidget(lbl_rate, 4, 1)
-        readout_grid.addWidget(self.lbl_action_val, 5, 0)
-        readout_grid.addWidget(self.lbl_rate_val, 5, 1)
+        # Divider between primary readouts and the analytics grid
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("color: #cccccc; background-color: #cccccc; max-height: 1px;")
+        readout_grid.addWidget(divider, 1, 0, 1, 4)
 
-        lbl_pa = QLabel("PEAK ANGLE:")
-        lbl_pa.setStyleSheet(lbl_style)
-        self.lbl_peak_angle = QLabel("0.0°")
-        self.lbl_peak_angle.setStyleSheet(small_style)
-        lbl_pv = QLabel("PEAK VELOCITY:")
-        lbl_pv.setStyleSheet(lbl_style)
-        self.lbl_peak_vel = QLabel("0.0°/s")
-        self.lbl_peak_vel.setStyleSheet(small_style)
-        readout_grid.addWidget(lbl_pa, 6, 0)
-        readout_grid.addWidget(lbl_pv, 6, 1)
-        readout_grid.addWidget(self.lbl_peak_angle, 7, 0)
-        readout_grid.addWidget(self.lbl_peak_vel, 7, 1)
+        # Rows 2-3: eight compact secondary stats across four columns
+        self.lbl_action_val = add_stat(2, 0, "MOTOR ACTION (PWM)", "0 [COAST]")
+        self.lbl_rate_val   = add_stat(2, 1, "SAMPLE RATE", "— Hz")
+        self.lbl_peak_angle = add_stat(2, 2, "PEAK ANGLE", "0.0°")
+        self.lbl_peak_vel   = add_stat(2, 3, "PEAK VELOCITY", "0.0°/s")
+        self.lbl_rms_val    = add_stat(3, 0, "RMS ERROR", "0.00°")
+        self.lbl_iae_val    = add_stat(3, 1, "IAE (∫|θ|dt)", "0.0")
+        self.lbl_effort_val = add_stat(3, 2, "MEAN |PWM| EFFORT", "0.0")
+        self.lbl_uptime_val = add_stat(3, 3, "BALANCE UPTIME", "0.0%")
+        self.lbl_reward_val = add_stat(4, 0, "CUMULATIVE REWARD", "0.0")
+        self.lbl_settle_val = add_stat(4, 1, "SETTLING BAND", f"±{self._settle_tol_deg:.1f}°")
 
         metrics_card.layout.addLayout(readout_grid)
         right_layout.addWidget(metrics_card)
@@ -305,17 +329,98 @@ class MainWindow(QMainWindow):
         p_item.addItem(pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen("#888888", width=1, style=Qt.PenStyle.DashLine)))
         p_item.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#888888", width=1, style=Qt.PenStyle.DashLine)))
         
+        # Settling-tolerance ring: dashed circle marking the ±settle_tol_deg band around upright
+        theta_ring = np.linspace(0, 2 * math.pi, 90)
+        ring_r = self._settle_tol_deg
+        ring = pg.PlotCurveItem(
+            ring_r * np.cos(theta_ring), ring_r * 20.0 * np.sin(theta_ring),
+            pen=pg.mkPen("#2ecc71", width=1.2, style=Qt.PenStyle.DashLine)
+        )
+        p_item.addItem(ring)
+
         # Upright origin target indicator (Green dot at 0, 0)
         target_dot = pg.ScatterPlotItem([0], [0], pen=pg.mkPen("#00aa00", width=2), brush=pg.mkBrush("#2ecc71"), size=14)
         p_item.addItem(target_dot)
 
+        # Faded historical trail beneath the live trajectory
+        self.phase_trail = p_item.plot(pen=pg.mkPen("#d3b3e6", width=1.0))
         self.phase_curve = p_item.plot(pen=pg.mkPen("#8e44ad", width=2.0))
+        # Current-state marker (leading dot)
+        self.phase_head = pg.ScatterPlotItem([], [], pen=pg.mkPen("#8e44ad", width=1),
+                                             brush=pg.mkBrush("#8e44ad"), size=10)
+        p_item.addItem(self.phase_head)
         self.phase_card.layout.addWidget(self.phase_plot)
         tab_phase_layout.addWidget(self.phase_card)
 
         self.tab_widget.addTab(tab_phase, "State-Space Phase Portrait")
 
-        splitter.setSizes([980, 640])
+        # TAB 3: Control-Cost / Reward Analytics — side-by-side (mirrors the RL reward function)
+        tab_reward = QWidget()
+        tab_reward_layout = QHBoxLayout(tab_reward)
+        tab_reward_layout.setContentsMargins(4, 8, 4, 4)
+        tab_reward_layout.setSpacing(8)
+
+        self.reward_card = CardWidget("INSTANTANEOUS CONTROL REWARD VS TIME")
+        self.reward_plot = pg.PlotWidget()
+        self.reward_curve = self._style_chart(self.reward_plot, y_label="Reward", y_unit="", line_color="#e67e22")
+        self.reward_plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#aaaaaa", width=1, style=Qt.PenStyle.DashLine)))
+        self.reward_card.layout.addWidget(self.reward_plot)
+        tab_reward_layout.addWidget(self.reward_card, 1)
+
+        self.cumreward_card = CardWidget("CUMULATIVE REWARD (RETURN) VS TIME")
+        self.cumreward_plot = pg.PlotWidget()
+        self.cumreward_curve = self._style_chart(self.cumreward_plot, y_label="Σ Reward", y_unit="", line_color="#16a085")
+        self.cumreward_card.layout.addWidget(self.cumreward_plot)
+        tab_reward_layout.addWidget(self.cumreward_card, 1)
+
+        self.tab_widget.addTab(tab_reward, "Control-Cost / Reward")
+
+        # TAB 4: Performance Analytics — two histograms side-by-side, cumulative IAE full-width below
+        tab_stats = QWidget()
+        tab_stats_layout = QGridLayout(tab_stats)
+        tab_stats_layout.setContentsMargins(4, 8, 4, 4)
+        tab_stats_layout.setSpacing(8)
+        tab_stats_layout.setColumnStretch(0, 1)
+        tab_stats_layout.setColumnStretch(1, 1)
+        tab_stats_layout.setRowStretch(0, 1)
+        tab_stats_layout.setRowStretch(1, 1)
+
+        self.hist_err_card = CardWidget("ANGLE-ERROR DISTRIBUTION (HISTOGRAM)")
+        self.hist_err_plot = pg.PlotWidget()
+        self.hist_err_plot.setBackground("#ffffff")
+        hi = self.hist_err_plot.getPlotItem()
+        hi.showGrid(x=True, y=True, alpha=0.15)
+        hi.setLabel("bottom", "Angle Deviation (θ)", units="°", **{"font-size": "10px", "color": "#555555"})
+        hi.setLabel("left", "Count", **{"font-size": "10px", "color": "#555555"})
+        self.hist_err_bars = pg.BarGraphItem(x=[0], height=[0], width=0.8, brush="#0066cc", pen=pg.mkPen("#003f7f"))
+        hi.addItem(self.hist_err_bars)
+        self.hist_err_card.layout.addWidget(self.hist_err_plot)
+        tab_stats_layout.addWidget(self.hist_err_card, 0, 0)
+
+        self.hist_pwm_card = CardWidget("PWM-EFFORT DISTRIBUTION (HISTOGRAM)")
+        self.hist_pwm_plot = pg.PlotWidget()
+        self.hist_pwm_plot.setBackground("#ffffff")
+        pi = self.hist_pwm_plot.getPlotItem()
+        pi.showGrid(x=True, y=True, alpha=0.15)
+        pi.setLabel("bottom", "PWM Duty", **{"font-size": "10px", "color": "#555555"})
+        pi.setLabel("left", "Count", **{"font-size": "10px", "color": "#555555"})
+        self.hist_pwm_bars = pg.BarGraphItem(x=[0], height=[0], width=0.8, brush="#27ae60", pen=pg.mkPen("#145a32"))
+        pi.addItem(self.hist_pwm_bars)
+        self.hist_pwm_card.layout.addWidget(self.hist_pwm_plot)
+        tab_stats_layout.addWidget(self.hist_pwm_card, 0, 1)
+
+        self.iae_card = CardWidget("CUMULATIVE ABSOLUTE ERROR (IAE) VS TIME")
+        self.iae_plot = pg.PlotWidget()
+        self.iae_curve = self._style_chart(self.iae_plot, y_label="∫|θ|dt", y_unit="", line_color="#c0392b")
+        self.iae_card.layout.addWidget(self.iae_plot)
+        tab_stats_layout.addWidget(self.iae_card, 1, 0, 1, 2)
+
+        self.tab_widget.addTab(tab_stats, "Performance Analytics")
+
+        # Charts area (right) stretches; fixed-width sidebar (left) holds viewport + controls.
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([600, 1050])
 
     def _style_chart(self, plot, y_label="Val", y_unit="", line_color="#000000"):
         plot.setBackground("#ffffff")
@@ -399,6 +504,7 @@ class MainWindow(QMainWindow):
         if self.rl_balancer: self.rl_balancer.disable()
         self.oscillation_ctrl.disable()
         self.current_action = 0
+        self.reset_analytics()
         if self.serial_client:
             self.serial_client.send_command(cmd_brake())
 
@@ -418,6 +524,18 @@ class MainWindow(QMainWindow):
 
     def _on_tare_clicked(self):
         print("[HIL COMMAND] Triggering hardware tare calibration...")
+        self.reset_analytics()
+
+        # Reset local filter/gate state so the new firmware zero takes effect cleanly.
+        self.prev_raw = None
+        self.angle_history = []
+        self._reject_streak = 0
+        if hasattr(self, "_last_good_raw"):
+            del self._last_good_raw
+        if hasattr(self, "smooth_vel"):
+            self.smooth_vel = 0.0
+
+        # Firmware owns zero-referencing: the 'Z' command re-tares on-device.
         if self.serial_client:
             self.serial_client.send_command(cmd_zero_tare())
 
@@ -457,6 +575,23 @@ class MainWindow(QMainWindow):
             self.serial_client.stop_client()
             self.serial_client = None
 
+    def reset_analytics(self):
+        """Clear peaks and running control-quality accumulators.
+
+        Peaks and Σ-accumulators only ever grow, so a single glitch (or just a long
+        session) can leave them showing stale/poisoned values. Reset them on demand
+        (STOP / tare) to keep the metrics panel trustworthy.
+        """
+        self.peak_angle = 0.0
+        self.peak_vel = 0.0
+        self._sum_sq_err = 0.0
+        self._sum_abs_err = 0.0
+        self._sum_abs_pwm = 0.0
+        self._sum_reward = 0.0
+        self._metric_n = 0
+        self._balanced_n = 0
+        print("[METRICS] Analytics accumulators and peaks reset.")
+
     # ── High-Frequency Closed-Loop HIL Telemetry & Actuator Step ──
     def on_angle_received(self, raw_val: float):
         now = time.time()
@@ -465,31 +600,73 @@ class MainWindow(QMainWindow):
         if self.start_time is None:
             self.start_time = now
 
-        # ── Noise Rejection: 3-tap Median Filter to reject EMI / I2C glitch spikes ──
+        # NOTE: Zero-referencing is owned entirely by the firmware (boot auto-tare + the
+        # 'Z' command), which streams an already-calibrated angle. We deliberately do NOT
+        # apply a second software offset here — stacking two independent tare references
+        # produced a small, accumulating calibration error over time.
+
+        # ── Outlier / Glitch Gate ──
+        # The AS5600 occasionally returns corrupt I2C reads (0x000 / 0xFFF or bit-flips)
+        # that appear as huge instantaneous jumps. A single glitch over one ~10ms sample
+        # implies thousands of deg/s and permanently poisons peaks/stats downstream.
+        # Reject any reading that implies physically-impossible motion; hold the last good
+        # value. If divergence persists (real motion or a genuine re-position), re-sync so
+        # we never get stuck rejecting forever.
+        if not hasattr(self, '_last_good_raw'):
+            self._last_good_raw = raw_val
+            self._reject_streak = 0
+        # Max plausible travel between samples (deg): dt * max_slew, clamped for jitter in dt.
+        max_slew_deg_s = 3000.0
+        max_jump = max(20.0, min(90.0, max_slew_deg_s * dt))
+        jump = abs(((raw_val - self._last_good_raw + 180.0) % 360.0) - 180.0)
+        if jump > max_jump and self._reject_streak < 5:
+            # Treat as a glitch: discard this sample and reuse the last good reading.
+            self._reject_streak += 1
+            raw_val = self._last_good_raw
+        else:
+            # Accept: either plausible motion, or sustained divergence forcing a re-sync.
+            self._reject_streak = 0
+            self._last_good_raw = raw_val
+
+        # ── Noise Rejection: 5-tap Median Filter to reject EMI / I2C glitch spikes ──
+        # A wider window kills isolated AS5600 count-glitches better than 3-tap.
         if not hasattr(self, 'angle_history'):
             self.angle_history = []
         self.angle_history.append(raw_val)
-        if len(self.angle_history) > 3:
+        if len(self.angle_history) > 5:
             self.angle_history.pop(0)
 
-        if len(self.angle_history) == 3:
+        if len(self.angle_history) >= 3:
+            # Wrap-aware median: rank samples by circular distance from the newest reading.
             base = self.angle_history[-1]
             sorted_angles = sorted(self.angle_history, key=lambda a: abs(((a - base + 180.0) % 360.0) - 180.0))
-            filtered_raw = sorted_angles[1]
+            filtered_raw = sorted_angles[len(sorted_angles) // 2]
         else:
             filtered_raw = raw_val
 
-        # ── EMA Low-Pass Filter on angle to eliminate sensor vibration chatter ──
+        # ── Adaptive EMA (never freezes) ──
+        # The AS5600 is 12-bit (~0.088°/count) and jitters ±1–2 counts at rest. We adapt the
+        # smoothing factor to motion magnitude — heavier smoothing when nearly still, near
+        # pass-through when slewing — but crucially we NEVER set alpha to 0. A hard freeze
+        # blinds the balancing controllers (which read self.angle_dev) to the small, slow
+        # corrections needed to catch the pole near upright. Idle spikes are handled by the
+        # glitch gate above, so a modest always-on alpha keeps the display calm without
+        # starving the control loop.
         if self.prev_raw is None:
             self.smooth_raw = filtered_raw
         else:
             diff = ((filtered_raw - self.smooth_raw + 180.0) % 360.0) - 180.0
-            self.smooth_raw = (self.smooth_raw + 0.4 * diff) % 360.0
+            mag = abs(diff)
+            # Floor of 0.35 (tracks tiny movements) ramping to 0.9 (near pass-through) when slewing.
+            alpha = min(0.9, 0.35 + (mag / 4.0))
+            self.smooth_raw = (self.smooth_raw + alpha * diff) % 360.0
 
         self.raw_angle = self.smooth_raw
         self.angle_dev = self.smooth_raw % 360.0
 
-        # Wrap-aware and EMA smoothed angular velocity
+        # Wrap-aware, heavily-smoothed angular velocity with a rest floor.
+        # Velocity is a differentiator (×sample-rate), so it amplifies angle noise the most —
+        # apply a stronger EMA and snap tiny residuals to zero.
         if self.prev_raw is not None and dt > 0:
             delta = (self.smooth_raw - self.prev_raw) % 360.0
             if delta > 180.0: delta -= 360.0
@@ -498,7 +675,10 @@ class MainWindow(QMainWindow):
             if not hasattr(self, 'smooth_vel'):
                 self.smooth_vel = raw_vel
             else:
-                self.smooth_vel = (0.3 * raw_vel) + (0.7 * self.smooth_vel)
+                self.smooth_vel = (0.2 * raw_vel) + (0.8 * self.smooth_vel)
+            # Snap near-zero velocity to exactly zero to stop idle drift on the readout/plots.
+            if abs(self.smooth_vel) < 3.0:
+                self.smooth_vel = 0.0
             self.vel_deg_s = max(-2000.0, min(2000.0, self.smooth_vel))
         self.prev_raw = self.smooth_raw
 
@@ -547,12 +727,39 @@ class MainWindow(QMainWindow):
             else:
                 self.current_action = 0
 
+        # ── Control-Quality Analytics (accumulate performance statistics) ──
+        # IMPORTANT: for a balancing task the error must be measured from UPRIGHT (180°),
+        # not from the hanging zero. `short_a` above is deviation-from-hanging (used for the
+        # "DEVIATION FROM ZERO" display); using it here would reward hanging and punish
+        # balancing. `err_upright_deg` is 0 at upright and ±180 when hanging.
+        err_upright_deg = (self.angle_dev % 360.0) - 180.0
+        err_rad = math.radians(err_upright_deg)
+        vel_rad = math.radians(self.vel_deg_s)
+        # Instantaneous reward mirrors the RL env: holding bonus + spin penalty + quadratic cost
+        in_band = abs(err_upright_deg) <= self._settle_tol_deg
+        holding_bonus = 10.0 if in_band else 0.0
+        is_spinning = abs(self.vel_deg_s) > 360.0
+        spin_penalty = (50.0 + 0.15 * (abs(self.vel_deg_s) - 360.0)) if is_spinning else 0.0
+        norm_action = float(self.current_action) / 255.0
+        inst_reward = holding_bonus - spin_penalty - (err_rad**2 + 0.2 * vel_rad**2 + 0.001 * (norm_action * 255.0)**2)
+
+        self._sum_sq_err += err_upright_deg**2
+        self._sum_abs_err += abs(err_upright_deg) * dt
+        self._sum_abs_pwm += abs(float(self.current_action))
+        self._sum_reward += inst_reward
+        self._metric_n += 1
+        if in_band:
+            self._balanced_n += 1
+
         # Update Ring Buffer
         i = self._buf_idx % self.history_len
         self._buf_time[i] = now - self.start_time
         self._buf_angle[i] = self.angle_dev
         self._buf_vel[i] = self.vel_deg_s
         self._buf_action[i] = float(self.current_action)
+        self._buf_reward[i] = inst_reward
+        self._buf_cumreward[i] = self._sum_reward
+        self._buf_iae[i] = self._sum_abs_err
         self._buf_idx += 1
         self._buf_count = min(self._buf_count + 1, self.history_len)
         self._data_dirty = True
@@ -561,13 +768,14 @@ class MainWindow(QMainWindow):
         count = self._buf_count
         idx = self._buf_idx
         if count < self.history_len:
-            return self._buf_time[:count], self._buf_angle[:count], self._buf_vel[:count], self._buf_action[:count]
+            sl = slice(0, count)
+            return (self._buf_time[sl], self._buf_angle[sl], self._buf_vel[sl],
+                    self._buf_action[sl], self._buf_reward[sl], self._buf_cumreward[sl], self._buf_iae[sl])
         start = idx % self.history_len
-        t = np.concatenate((self._buf_time[start:], self._buf_time[:start]))
-        a = np.concatenate((self._buf_angle[start:], self._buf_angle[:start]))
-        v = np.concatenate((self._buf_vel[start:], self._buf_vel[:start]))
-        u = np.concatenate((self._buf_action[start:], self._buf_action[:start]))
-        return t, a, v, u
+        def roll(buf):
+            return np.concatenate((buf[start:], buf[:start]))
+        return (roll(self._buf_time), roll(self._buf_angle), roll(self._buf_vel),
+                roll(self._buf_action), roll(self._buf_reward), roll(self._buf_cumreward), roll(self._buf_iae))
 
     # ── GUI Redraw Timers ──
     def tick_fast(self):
@@ -582,6 +790,17 @@ class MainWindow(QMainWindow):
         self.lbl_peak_angle.setText(f"{self.peak_angle:.1f}°")
         self.lbl_peak_vel.setText(f"{self.peak_vel:.1f}°/s")
 
+        # ── Control-Quality Analytics readouts ──
+        if self._metric_n > 0:
+            rms = math.sqrt(self._sum_sq_err / self._metric_n)
+            mean_effort = self._sum_abs_pwm / self._metric_n
+            uptime_pct = 100.0 * self._balanced_n / self._metric_n
+            self.lbl_rms_val.setText(f"{rms:.2f}°")
+            self.lbl_iae_val.setText(f"{self._sum_abs_err:.1f}")
+            self.lbl_effort_val.setText(f"{mean_effort:.1f}")
+            self.lbl_uptime_val.setText(f"{uptime_pct:.1f}%")
+            self.lbl_reward_val.setText(f"{self._sum_reward:.0f}")
+
         if self.is_connected:
             self.lbl_telemetry.setText(f"Time: {self.elapsed_time:.1f}s | Port: {self.serial_client.port if self.serial_client else 'N/A'} | {self.sample_rate:.0f} Hz")
         else:
@@ -592,23 +811,46 @@ class MainWindow(QMainWindow):
     def tick_graph(self):
         if not self._data_dirty: return
         self._data_dirty = False
-        t, a, v, u = self._get_buf_slices()
-        
-        short_angles = [((x + 180.0) % 360.0) - 180.0 for x in a]
+        t, a, v, u, r, cr, iae = self._get_buf_slices()
+
+        short_angles = ((np.asarray(a) + 180.0) % 360.0) - 180.0
+        v = np.asarray(v)
         if self.invert_display:
-            a_disp = [-x for x in short_angles]
-            v_disp = [-x for x in v]
+            a_disp = -short_angles
+            v_disp = -v
         else:
             a_disp = short_angles
             v_disp = v
 
-        # Tab 1 Curves
+        # Tab 1: Time-Series Curves
         self.angle_curve.setData(t, a_disp)
         self.vel_curve.setData(t, v_disp)
         self.action_curve.setData(t, u)
-        
-        # Tab 2 Phase Portrait Curve
-        self.phase_curve.setData(a_disp, v_disp)
+
+        # Tab 2: Phase Portrait — faded full trail, recent bright segment, leading head marker
+        self.phase_trail.setData(a_disp, v_disp)
+        tail = 120  # highlight the most recent trajectory segment
+        self.phase_curve.setData(a_disp[-tail:], v_disp[-tail:])
+        if len(a_disp) > 0:
+            self.phase_head.setData([a_disp[-1]], [v_disp[-1]])
+
+        # Tab 3: Control-Cost / Reward
+        self.reward_curve.setData(t, np.asarray(r))
+        self.cumreward_curve.setData(t, np.asarray(cr))
+
+        # Tab 4: Performance Analytics — histograms + cumulative IAE
+        if len(a_disp) > 1:
+            err_counts, err_edges = np.histogram(a_disp, bins=25)
+            err_centers = (err_edges[:-1] + err_edges[1:]) / 2.0
+            err_width = (err_edges[1] - err_edges[0]) * 0.9
+            self.hist_err_bars.setOpts(x=err_centers, height=err_counts, width=err_width)
+
+            pwm_counts, pwm_edges = np.histogram(np.asarray(u), bins=25)
+            pwm_centers = (pwm_edges[:-1] + pwm_edges[1:]) / 2.0
+            pwm_width = max(1e-3, (pwm_edges[1] - pwm_edges[0]) * 0.9)
+            self.hist_pwm_bars.setOpts(x=pwm_centers, height=pwm_counts, width=pwm_width)
+
+        self.iae_curve.setData(t, np.asarray(iae))
 
     def closeEvent(self, event):
         if self.serial_client:
