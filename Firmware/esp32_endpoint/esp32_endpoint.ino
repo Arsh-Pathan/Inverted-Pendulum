@@ -32,7 +32,7 @@ void setup() {
     // Initialize I2C bus and AS5600 magnetic encoder
     bool encoderOk = encoder.begin();
     if (!encoderOk) {
-        Serial.println("[WARNING] AS5600 sensor not detected on I2C bus! Check SDA (GPIO21) & SCL (GPIO22).");
+        Serial.println("[WARNING] AS5600 sensor not detected on I2C bus! Check SDA (GPIO22) & SCL (GPIO23).");
     } else {
         Serial.println("[READY] Inverted Pendulum ESP32 HIL Endpoint v2.0 initialized successfully.");
     }

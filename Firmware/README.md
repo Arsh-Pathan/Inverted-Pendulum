@@ -32,8 +32,8 @@ This guarantees 100% compilation compatibility across modern Arduino IDE 2.x and
 
 | Component | Signal | ESP32 GPIO | Description |
 | :--- | :--- | :--- | :--- |
-| **AS5600 Sensor** | I2C SDA | **GPIO 21** | 400 kHz Fast I2C Data |
-| **AS5600 Sensor** | I2C SCL | **GPIO 22** | 400 kHz Fast I2C Clock |
+| **AS5600 Sensor** | I2C SDA | **GPIO 22** | 400 kHz Fast I2C Data |
+| **AS5600 Sensor** | I2C SCL | **GPIO 23** | 400 kHz Fast I2C Clock |
 | **TB6612FNG Driver**| AIN1 | **GPIO 25** | Direction control line 1 |
 | **TB6612FNG Driver**| AIN2 | **GPIO 26** | Direction control line 2 |
 | **TB6612FNG Driver**| PWMA | **GPIO 27** | LEDC Channel 0 PWM (0-255) |
