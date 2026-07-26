@@ -67,10 +67,6 @@ class LQRBalancer(BaseController):
         if abs(error) < self.deadzone_deg and abs(self.filtered_velocity) < self.deadzone_vel:
             return 0
 
-        # Lower Hemisphere Inversion
-        if not state.is_above_horizontal:
-            output = -output
-
         abs_output = abs(output)
         if abs_output <= 0.05:
             return 0
