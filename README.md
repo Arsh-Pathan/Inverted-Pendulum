@@ -116,6 +116,8 @@ python -m unittest discover tests -v
 ## 📚 Documentation Reference
 
 For deeper technical dive into the algorithms, wiring, and serial API, consult the `docs/` directory:
+* [Technical Research Paper Formulation & Lagrangian Mathematics](file:///C:/Users/ArshPathan/Projects/Hardware/Inverted-Pendulum/docs/research_paper_formulation.md)
 * [Hardware-in-the-Loop Architecture & Algorithms](file:///C:/Users/ArshPathan/Projects/Hardware/Inverted-Pendulum/docs/architecture.md)
 * [ESP32 Serial Endpoint Protocol Specification](file:///C:/Users/ArshPathan/Projects/Hardware/Inverted-Pendulum/docs/serial_protocol.md)
 * [TB6612FNG & AS5600 Wiring Schematics](file:///C:/Users/ArshPathan/Projects/Hardware/Inverted-Pendulum/docs/wiring_guide.md)
+* [AGENT.md — AI Contributor System Manifest](file:///C:/Users/ArshPathan/Projects/Hardware/Inverted-Pendulum/AGENT.md)
