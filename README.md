@@ -84,6 +84,8 @@ python python/main.py
 ```
 * **START OSCILLATION:** Runs back-and-forth track testing.
 * **START AUTO-BALANCE (HIL):** Engages the closed-loop Python PID balancing engine. Manually raise the pendulum upright ($180^\circ$) to let the controller take over!
+* **MOTOR DIRECTION REVERSAL:** Interactive checkbox (`[x] Reverse Motor Direction`) checked by default to ensure the cart accelerates in the exact direction of the pendulum's fall ("catch-the-fall" principle), instantly adapting to different physical DC motor wirings without rewiring hardware.
+* **DISPLAY INVERSION & TELEMETRY:** Telemetry readouts and time-series charts wrap angles into the shortest-path range $[-180.0^\circ, +180.0^\circ]$ with glitch clamping ($\pm 2,000^\circ/\text{s}$ velocity limit) to prevent wrap-around chart spikes. Includes an independent UI display inversion toggle.
 * **LIVE TUNING:** Adjust $K_P$, $K_I$, $K_D$, and EMA $\alpha$ spinboxes on the fly—settings automatically persist to `config/default_config.json`.
 * **KEYBOARD OVERRIDE:** Press `A` (left) and `D` (right) for manual cart override when idle.
 

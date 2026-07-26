@@ -82,3 +82,7 @@ To test the physical wiring before running the full control host:
 4. Type `M,100` and hit Enter $\rightarrow$ The motor should gently spin forward.
 5. Type `M,-100` and hit Enter $\rightarrow$ The motor should spin reverse.
 6. Type `B` and hit Enter $\rightarrow$ The motor should brake instantly.
+
+> [!TIP]
+> **Motor Polarity & "Catch-the-Fall" Balancing:**
+> Depending on how your motor wires (`AO1`/`AO2`) are connected to the DC gearmotor terminals, sending positive PWM (`M,100`) may move the cart left or right. To balance an inverted pendulum, whenever the rod falls in one direction, the cart MUST accelerate in that exact same direction to catch it and push the base back under the center of gravity. If your cart moves away from the falling rod during auto-balancing, simply check or uncheck the **Reverse Motor Direction** checkbox (`chk_invert_motor`) in the GUI Control Panel. This instantly flips the PWM sign in software ($u = -u$), providing 1-click polarity correction without touching physical wires!

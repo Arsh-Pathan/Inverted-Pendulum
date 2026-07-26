@@ -60,6 +60,12 @@ To maintain upright stability without mechanical limit-cycle buzzing or quantiza
     $$\text{filtered\_derivative}_t = \alpha \cdot \frac{e_t - e_{t-1}}{\Delta t} + (1 - \alpha) \cdot \text{filtered\_derivative}_{t-1}$$
     With $\alpha = 0.08$ at $100\text{ Hz}$, the filter cutoff frequency is $\approx 6.4\text{ Hz}$, completely dampening sensor jitter while preserving phase margin.
 
+*   **Shortest-Path Telemetry Wrapping & Velocity Clamping:**
+    While raw AS5600 encoder telemetry streams in the modulo range $[0^\circ, 360^\circ)$, plotting raw angles on time-series charts when hovering around vertical upright ($0^\circ$ or $360^\circ$) causes visual wrap-around artifacts (jumping between $0^\circ$ and $359.9^\circ$) and numerical velocity derivative spikes ($> 19,000^\circ/\text{s}$). The host telemetry processor wraps all angles into the shortest-path range $[-180.0^\circ, +180.0^\circ]$ using $((\theta + 180^\circ) \bmod 360^\circ) - 180^\circ$ and applies velocity clamping ($\pm 2,000^\circ/\text{s}$) to ensure pristine line charts, phase portraits, and peak readouts.
+
+*   **"Catch-the-Fall" Motor Polarity & Direction Reversal:**
+    To maintain unstable equilibrium above horizontal ($90^\circ < \theta < 270^\circ$), whenever the pendulum rod falls in one direction, the cart MUST accelerate in that exact same direction to catch the falling center of mass and push the base back under the rod. Because physical DC motor polarity wiring (`M1+`/`M1-`) varies across robot builds, the Control Panel provides an interactive **Reverse Motor Direction** checkbox (`chk_invert_motor`, checked by default) that instantly flips the PWM output sign in software ($u = -u$). This provides 1-click polarity alignment without hardware rewiring.
+
 *   **Dynamic Crossing Inversion:**
     The physical dynamics of a pendulum invert across the horizontal plane ($90^\circ$ and $270^\circ$). Below horizontal, the system is stable and requires opposing torque to dampen swings. Above horizontal, the system is unstable and requires same-direction acceleration to catch the falling center of mass. The controller dynamically checks:
     $$\text{above\_horizontal} = (90^\circ < \theta < 270^\circ)$$
