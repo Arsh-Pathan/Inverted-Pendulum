@@ -91,6 +91,8 @@ class MainWindow(QMainWindow):
 
         self.active_mode = "PID" # "PID", "LQR", "RL", "HYBRID"
         self.current_action = 0
+        self.invert_angle = True
+        self.offset_180 = False
 
         # 3) Telemetry State Variables
         self.theta = 0.0
@@ -286,7 +288,7 @@ class MainWindow(QMainWindow):
         self.action_card.layout.addWidget(self.action_plot)
         tab_time_layout.addWidget(self.action_card, 1)
 
-        self.tab_widget.addTab(tab_time, "📊 Time-Series Telemetry & Actuation")
+        self.tab_widget.addTab(tab_time, "Time-Series Telemetry & Actuation")
 
         # TAB 2: State-Space Phase Portrait (Angle vs Velocity)
         tab_phase = QWidget()
@@ -311,7 +313,7 @@ class MainWindow(QMainWindow):
         self.phase_card.layout.addWidget(self.phase_plot)
         tab_phase_layout.addWidget(self.phase_card)
 
-        self.tab_widget.addTab(tab_phase, "🌀 State-Space Phase Portrait")
+        self.tab_widget.addTab(tab_phase, "State-Space Phase Portrait")
 
         splitter.setSizes([980, 640])
 
@@ -344,9 +346,19 @@ class MainWindow(QMainWindow):
         self.ctrl_panel.balance_toggled.connect(self._on_balance_toggled)
         self.ctrl_panel.tare_clicked.connect(self._on_tare_clicked)
         self.ctrl_panel.mode_selected.connect(self._on_mode_selected)
+        self.ctrl_panel.invert_toggled.connect(self._on_invert_toggled)
+        self.ctrl_panel.offset_toggled.connect(self._on_offset_toggled)
         self.ctrl_panel.speed_changed.connect(lambda v: self.oscillation_ctrl.update_params({"speed": v}))
         self.ctrl_panel.duration_changed.connect(lambda v: self.oscillation_ctrl.update_params({"duration_ms": v}))
         self.ctrl_panel.pid_changed.connect(self._on_pid_changed)
+
+    def _on_invert_toggled(self, checked: bool):
+        self.invert_angle = checked
+        print(f"[HIL TELEMETRY] Invert angle sign set to: {checked}")
+
+    def _on_offset_toggled(self, checked: bool):
+        self.offset_180 = checked
+        print(f"[HIL TELEMETRY] 180 deg offset set to: {checked}")
 
     def _on_mode_selected(self, mode: str):
         self.active_mode = mode
@@ -452,6 +464,11 @@ class MainWindow(QMainWindow):
         self.last_time = now
         if self.start_time is None:
             self.start_time = now
+
+        if self.invert_angle:
+            raw_val = (360.0 - raw_val) % 360.0
+        if self.offset_180:
+            raw_val = (raw_val + 180.0) % 360.0
 
         self.raw_angle = raw_val
         self.angle_dev = raw_val % 360.0

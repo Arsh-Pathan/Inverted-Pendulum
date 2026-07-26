@@ -1,18 +1,21 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, 
-                             QPushButton, QLabel, QSpinBox, QDoubleSpinBox)
+                             QPushButton, QLabel, QSpinBox, QDoubleSpinBox, QCheckBox)
 from PyQt6.QtCore import pyqtSignal
 from .card_widget import CardWidget
 
 class ControlPanel(QWidget):
     """
     Control Panel widget containing motor actuation triggers, HIL control mode selector
-    (PID, LQR, RL, Hybrid Swing-Up), auto-balance toggle, and real-time gain tuning spinboxes.
+    (PID, LQR, RL, Hybrid Swing-Up), sensor inversion checkboxes, auto-balance toggle, 
+    and real-time gain tuning spinboxes.
     """
     start_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
     balance_toggled = pyqtSignal(bool)
     tare_clicked = pyqtSignal()
     mode_selected = pyqtSignal(str) # "PID", "LQR", "RL", "HYBRID"
+    invert_toggled = pyqtSignal(bool)
+    offset_toggled = pyqtSignal(bool)
     
     speed_changed = pyqtSignal(int)
     duration_changed = pyqtSignal(int)
@@ -72,10 +75,10 @@ class ControlPanel(QWidget):
         mode_layout = QHBoxLayout()
         mode_layout.setSpacing(6)
 
-        self.btn_mode_pid = QPushButton("🔵 PID Mode")
-        self.btn_mode_lqr = QPushButton("🟣 LQR Mode")
-        self.btn_mode_rl = QPushButton("🟢 RL Policy")
-        self.btn_mode_hybrid = QPushButton("🟠 Hybrid Swing-Up")
+        self.btn_mode_pid = QPushButton("PID Mode")
+        self.btn_mode_lqr = QPushButton("LQR Mode")
+        self.btn_mode_rl = QPushButton("RL Policy")
+        self.btn_mode_hybrid = QPushButton("Hybrid Swing-Up")
 
         self.mode_buttons = {
             "PID": self.btn_mode_pid,
@@ -90,6 +93,24 @@ class ControlPanel(QWidget):
 
         ctrl_layout.addLayout(mode_layout)
         self._update_mode_button_styles()
+
+        # Row 1.7: Sensor Transformations (Invert Sign & 180 Offset)
+        trans_layout = QHBoxLayout()
+        trans_layout.setSpacing(12)
+
+        self.chk_invert = QCheckBox("Invert Angle Sign (Flip Direction)")
+        self.chk_invert.setStyleSheet("font-size: 12px; font-weight: bold; color: #333333;")
+        self.chk_invert.setChecked(True)
+        self.chk_invert.toggled.connect(self.invert_toggled.emit)
+
+        self.chk_offset = QCheckBox("Offset 180 deg (Zero is Upright)")
+        self.chk_offset.setStyleSheet("font-size: 12px; font-weight: bold; color: #333333;")
+        self.chk_offset.setChecked(False)
+        self.chk_offset.toggled.connect(self.offset_toggled.emit)
+
+        trans_layout.addWidget(self.chk_invert)
+        trans_layout.addWidget(self.chk_offset)
+        ctrl_layout.addLayout(trans_layout)
 
         # Row 1.8: Auto-Balance & Tare Buttons
         action_layout = QHBoxLayout()
