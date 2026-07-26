@@ -118,18 +118,24 @@ class InvertedPendulumEnv:
                 vel_rad = math.radians(getattr(self.serial_client, 'last_velocity', 0.0))
                 self.state = np.array([err_rad, vel_rad], dtype=np.float32)
 
-        # Reward function: quadratic penalty on angular error, velocity, and control effort
-        theta_err, vel = self.state[0], self.state[1]
-        reward = - (float(theta_err**2) + 0.1 * float(vel**2) + 0.001 * float(norm_action**2))
+        # Upright Holding Buffer [179°, 181°]: ±1.0 degree around 180° upright
+        err_deg = math.degrees(theta_err)
+        in_upright_buffer = bool(abs(err_deg) <= 1.0)
+        holding_bonus = 10.0 if in_upright_buffer else 0.0
+
+        # Reward function: quadratic penalty plus positive holding bonus when inside buffer
+        reward = holding_bonus - (float(theta_err**2) + 0.1 * float(vel**2) + 0.001 * float(norm_action**2))
         
         # Check termination (if pendulum falls beyond ±45 degrees in stabilize task)
         terminated = bool(abs(theta_err) > math.radians(45.0))
         truncated = bool(self.current_step >= self.max_episode_steps)
 
         info = {
-            "error_deg": math.degrees(theta_err),
+            "error_deg": err_deg,
             "velocity_deg_s": math.degrees(vel),
-            "pwm_command": pwm_command
+            "pwm_command": pwm_command,
+            "in_upright_buffer": in_upright_buffer,
+            "holding_bonus": holding_bonus
         }
 
         return self.state.copy(), float(reward), terminated, truncated, info

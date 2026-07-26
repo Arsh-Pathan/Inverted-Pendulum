@@ -30,7 +30,10 @@ class TestInvertedPendulumEnv(unittest.TestCase):
 
         self.assertEqual(next_obs.shape, (2,))
         self.assertIsInstance(reward, float)
-        self.assertLessEqual(reward, 0.0) # Quadratic penalty reward is <= 0
+        self.assertIn("in_upright_buffer", info)
+        self.assertIn("holding_bonus", info)
+        if info["in_upright_buffer"]:
+            self.assertGreaterEqual(reward, 0.0) # Holding bonus applies inside [179°, 181°]
         self.assertIsInstance(terminated, bool)
         self.assertIsInstance(truncated, bool)
         self.assertIn("pwm_command", info)

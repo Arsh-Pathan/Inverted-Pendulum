@@ -123,8 +123,11 @@ To overcome the challenges of non-linear stiction, track imperfections, and sens
 *   **Action Space ($\mathcal{A} = [-1.0, +1.0]$):** Continuous normalized voltage command. In HIL hardware execution, $a_t$ is linearly mapped to integer PWM duty cycle with deadband friction compensation:
     $$\text{PWM}(a_t) = \text{sign}(a_t) \cdot \left( \text{PWM}_{\min} + \lfloor |a_t| \cdot (\text{PWM}_{\max} - \text{PWM}_{\min}) \rfloor \right)$$
 *   **Reward Function ($\mathcal{R}$):**
-    $$r(s_t, a_t) = - \left( w_\theta e_\theta^2 + w_\omega \dot{\theta}^2 + w_u a_t^2 \right)$$
-    where $w_\theta = 1.0$, $w_\omega = 0.1$, and $w_u = 0.001$. This quadratic penalty shapes smooth control trajectories while penalizing aggressive motor chattering.
+    To encourage the agent to enter and sustain vertical balance inside the target upright buffer $[179^\circ, 181^\circ]$ ($|e_\theta| \le 1.0^\circ$), the reward function combines an upright holding survival bonus $R_{\text{hold}}$ with a quadratic tracking penalty:
+    $$r(s_t, a_t) = R_{\text{hold}}(e_\theta) - \left( w_\theta e_\theta^2 + w_\omega \dot{\theta}^2 + w_u a_t^2 \right)$$
+    where:
+    $$R_{\text{hold}}(e_\theta) = \begin{cases} +10.0 & \text{if } |e_\theta| \le \frac{\pi}{180}\text{ rad } (\pm 1.0^\circ \text{ buffer around } 180^\circ) \\ 0.0 & \text{otherwise} \end{cases}$$
+    and weights $w_\theta = 1.0$, $w_\omega = 0.1$, and $w_u = 0.001$. This formulation creates a powerful potential well that rewards long-duration balance holding while shaping smooth trajectories and penalizing motor chattering.
 *   **Discount Factor ($\gamma$):** Set to $\gamma = 0.99$ for infinite-horizon continuous stabilization.
 
 ### 5.2 Proximal Policy Optimization (PPO) & Soft Actor-Critic (SAC)
