@@ -8,8 +8,8 @@ This document outlines the physical wiring and connections between the **ESP32 M
 
 | Device / Pin | ESP32 GPIO Pin | Description / Notes |
 | :--- | :--- | :--- |
-| **AS5600 SDA** | `GPIO 22` | I2C Data Line (with internal/external pull-up) |
-| **AS5600 SCL** | `GPIO 23` | I2C Clock Line (with internal/external pull-up) |
+| **AS5600 SDA** | `GPIO 21` | I2C Data Line (with internal/external pull-up) |
+| **AS5600 SCL** | `GPIO 22` | I2C Clock Line (with internal/external pull-up) |
 | **TB6612FNG AIN1**| `GPIO 25` | Motor Direction Pin 1 |
 | **TB6612FNG AIN2**| `GPIO 26` | Motor Direction Pin 2 |
 | **TB6612FNG PWMA**| `GPIO 27` | Motor Speed (LEDC PWM @ 1 kHz; compatible with Core v2.x & v3.0+) |
@@ -50,8 +50,8 @@ This document outlines the physical wiring and connections between the **ESP32 M
        │        AS5600         │
        │   MAGNETIC ENCODER    │
        │                       │
-       │  SDA ◄────► GPIO 22   │
-       │  SCL ◄────► GPIO 23   │
+       │  SDA ◄────► GPIO 21   │
+       │  SCL ◄────► GPIO 22   │
        │  VCC ◄────► 3.3V      │
        │  GND ◄────► GND       │
        └───────────────────────┘

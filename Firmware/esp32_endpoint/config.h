@@ -9,8 +9,8 @@
 #define MAX_TELEMETRY_HZ      1000
 
 // ─── AS5600 Magnetic Encoder (I2C) Pin Mapping ───
-#define PIN_I2C_SDA           22
-#define PIN_I2C_SCL           23
+#define PIN_I2C_SDA           21
+#define PIN_I2C_SCL           22
 #define AS5600_I2C_ADDR       0x36
 #define AS5600_REG_ANGLE_H    0x0E
 #define AS5600_REG_ANGLE_L    0x0F
