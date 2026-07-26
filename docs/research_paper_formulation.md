@@ -124,11 +124,11 @@ To overcome the challenges of non-linear stiction, track imperfections, and sens
     $$\text{PWM}(a_t) = \text{sign}(a_t) \cdot \left( \text{PWM}_{\min} + \lfloor |a_t| \cdot (\text{PWM}_{\max} - \text{PWM}_{\min}) \rfloor \right)$$
 *   **Reward Function ($\mathcal{R}$):**
     To encourage the agent to enter and sustain vertical balance inside the target upright buffer $[179^\circ, 181^\circ]$ ($|e_\theta| \le 1.0^\circ$) while heavily penalizing continuous rotation or spinning ($|\dot{\theta}| > 360^\circ/\text{s}$), the reward function combines an upright holding survival bonus $R_{\text{hold}}$ and a spin penalty $R_{\text{spin}}$ with quadratic tracking costs:
-    $$r(s_t, a_t) = R_{\text{hold}}(e_\theta) - R_{\text{spin}}(\dot{\theta}) - \left( w_\theta e_\theta^2 + w_\omega \dot{\theta}^2 + w_u a_t^2 \right)$$
-    where:
-    $$R_{\text{hold}}(e_\theta) = \begin{cases} +10.0 & \text{if } |e_\theta| \le \frac{\pi}{180}\text{ rad } (\pm 1.0^\circ \text{ buffer around } 180^\circ) \\ 0.0 & \text{otherwise} \end{cases}$$
+    $$r(s_t, a_t) = R_{\text{hold}}(e_\theta, k) - R_{\text{spin}}(\dot{\theta}) - \left( w_\theta e_\theta^2 + w_\omega \dot{\theta}^2 + w_u a_t^2 \right)$$
+    where $k \ge 1$ is the number of consecutive time steps spent continuously balanced within the upright buffer, and:
+    $$R_{\text{hold}}(e_\theta, k) = \begin{cases} +10.0 + \min(40.0, \, 0.1 \cdot k) & \text{if } |e_\theta| \le \frac{\pi}{180}\text{ rad } (\pm 1.0^\circ \text{ buffer around } 180^\circ) \\ 0.0 & \text{otherwise} \end{cases}$$
     $$R_{\text{spin}}(\dot{\theta}) = \begin{cases} +20.0 & \text{if } |\dot{\theta}| > 2\pi\text{ rad/s } (> 360^\circ/\text{s continuous spinning}) \\ 0.0 & \text{otherwise} \end{cases}$$
-    and weights $w_\theta = 1.0$, $w_\omega = 0.2$, and $w_u = 0.001$. This formulation creates a powerful potential well that rewards long-duration balance holding while penalizing rapid propeller spinning and aggressive motor chattering.
+    and weights $w_\theta = 1.0$, $w_\omega = 0.2$, and $w_u = 0.001$. This formulation creates a powerful potential well that progressively increases reward up to $+50.0$ for long-duration balance holding while penalizing rapid propeller spinning and aggressive motor chattering.
 *   **Discount Factor ($\gamma$):** Set to $\gamma = 0.99$ for infinite-horizon continuous stabilization.
 
 ### 5.2 Proximal Policy Optimization (PPO) & Soft Actor-Critic (SAC)

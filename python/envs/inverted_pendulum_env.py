@@ -38,6 +38,7 @@ class InvertedPendulumEnv:
         self.simulated = simulated or (serial_port is None) or (SerialClient is None)
         self.max_episode_steps = max_episode_steps
         self.current_step = 0
+        self.upright_steps = 0
         
         # Physical simulation constants
         self.g = 9.81           # Gravity (m/s^2)
@@ -65,6 +66,7 @@ class InvertedPendulumEnv:
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         self.current_step = 0
+        self.upright_steps = 0
         if seed is not None:
             np.random.seed(seed)
 
@@ -122,7 +124,14 @@ class InvertedPendulumEnv:
         err_deg = math.degrees(theta_err)
         vel_deg_s = math.degrees(vel)
         in_upright_buffer = bool(abs(err_deg) <= 1.0)
-        holding_bonus = 10.0 if in_upright_buffer else 0.0
+        
+        if in_upright_buffer:
+            self.upright_steps += 1
+            # Progressive time bonus: base 10.0 + 0.1 per continuous step (up to +50.0 max)
+            holding_bonus = 10.0 + min(40.0, 0.1 * float(self.upright_steps))
+        else:
+            self.upright_steps = 0
+            holding_bonus = 0.0
 
         # Spin Penalty: strongly penalize high angular velocities and spinning (> 360 deg/s)
         is_spinning = bool(abs(vel_deg_s) > 360.0)
@@ -140,6 +149,8 @@ class InvertedPendulumEnv:
             "velocity_deg_s": vel_deg_s,
             "pwm_command": pwm_command,
             "in_upright_buffer": in_upright_buffer,
+            "upright_steps": self.upright_steps,
+            "upright_duration_s": float(self.upright_steps * self.dt),
             "holding_bonus": holding_bonus,
             "is_spinning": is_spinning,
             "spin_penalty": spin_penalty

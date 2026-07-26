@@ -52,6 +52,26 @@ class TestInvertedPendulumEnv(unittest.TestCase):
         self.assertEqual(info["spin_penalty"], 20.0)
         self.assertLess(reward, -10.0) # Reward should be strongly negative due to spin penalty
 
+    def test_progressive_holding_bonus(self):
+        env = InvertedPendulumEnv(simulated=True)
+        env.reset(seed=42)
+        # Manually hold inside upright buffer (0.0 rad error, 0.0 vel)
+        env.state = np.array([0.0, 0.0], dtype=np.float32)
+        _, _, _, _, info1 = env.step(np.array([0.0], dtype=np.float32))
+        self.assertEqual(info1["upright_steps"], 1)
+        self.assertAlmostEqual(info1["holding_bonus"], 10.1)
+
+        env.state = np.array([0.0, 0.0], dtype=np.float32)
+        _, _, _, _, info2 = env.step(np.array([0.0], dtype=np.float32))
+        self.assertEqual(info2["upright_steps"], 2)
+        self.assertAlmostEqual(info2["holding_bonus"], 10.2)
+
+        # Drop out of buffer (> 1.0 deg -> 0.1 rad is ~5.7 deg)
+        env.state = np.array([0.1, 0.0], dtype=np.float32)
+        _, _, _, _, info3 = env.step(np.array([0.0], dtype=np.float32))
+        self.assertEqual(info3["upright_steps"], 0)
+        self.assertEqual(info3["holding_bonus"], 0.0)
+
     def test_episode_truncation(self):
         env = InvertedPendulumEnv(simulated=True, max_episode_steps=5)
         env.reset()
