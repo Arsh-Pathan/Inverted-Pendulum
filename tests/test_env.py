@@ -32,12 +32,25 @@ class TestInvertedPendulumEnv(unittest.TestCase):
         self.assertIsInstance(reward, float)
         self.assertIn("in_upright_buffer", info)
         self.assertIn("holding_bonus", info)
+        self.assertIn("is_spinning", info)
+        self.assertIn("spin_penalty", info)
         if info["in_upright_buffer"]:
             self.assertGreaterEqual(reward, 0.0) # Holding bonus applies inside [179°, 181°]
         self.assertIsInstance(terminated, bool)
         self.assertIsInstance(truncated, bool)
         self.assertIn("pwm_command", info)
         self.assertEqual(info["pwm_command"], 127)
+
+    def test_spin_penalty(self):
+        env = InvertedPendulumEnv(simulated=True)
+        env.reset(seed=42)
+        # Manually set state to high spinning velocity (> 360 deg/s -> 10.0 rad/s)
+        env.state = np.array([0.0, 10.0], dtype=np.float32)
+        _, reward, _, _, info = env.step(np.array([0.0], dtype=np.float32))
+        
+        self.assertTrue(info["is_spinning"])
+        self.assertEqual(info["spin_penalty"], 20.0)
+        self.assertLess(reward, -10.0) # Reward should be strongly negative due to spin penalty
 
     def test_episode_truncation(self):
         env = InvertedPendulumEnv(simulated=True, max_episode_steps=5)

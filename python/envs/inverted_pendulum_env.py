@@ -120,11 +120,16 @@ class InvertedPendulumEnv:
 
         # Upright Holding Buffer [179°, 181°]: ±1.0 degree around 180° upright
         err_deg = math.degrees(theta_err)
+        vel_deg_s = math.degrees(vel)
         in_upright_buffer = bool(abs(err_deg) <= 1.0)
         holding_bonus = 10.0 if in_upright_buffer else 0.0
 
-        # Reward function: quadratic penalty plus positive holding bonus when inside buffer
-        reward = holding_bonus - (float(theta_err**2) + 0.1 * float(vel**2) + 0.001 * float(norm_action**2))
+        # Spin Penalty: strongly penalize high angular velocities and spinning (> 360 deg/s)
+        is_spinning = bool(abs(vel_deg_s) > 360.0)
+        spin_penalty = 20.0 if is_spinning else 0.0
+
+        # Reward function: holding bonus minus spin penalty minus quadratic tracking costs
+        reward = holding_bonus - spin_penalty - (float(theta_err**2) + 0.2 * float(vel**2) + 0.001 * float(norm_action**2))
         
         # Check termination (if pendulum falls beyond ±45 degrees in stabilize task)
         terminated = bool(abs(theta_err) > math.radians(45.0))
@@ -132,10 +137,12 @@ class InvertedPendulumEnv:
 
         info = {
             "error_deg": err_deg,
-            "velocity_deg_s": math.degrees(vel),
+            "velocity_deg_s": vel_deg_s,
             "pwm_command": pwm_command,
             "in_upright_buffer": in_upright_buffer,
-            "holding_bonus": holding_bonus
+            "holding_bonus": holding_bonus,
+            "is_spinning": is_spinning,
+            "spin_penalty": spin_penalty
         }
 
         return self.state.copy(), float(reward), terminated, truncated, info
