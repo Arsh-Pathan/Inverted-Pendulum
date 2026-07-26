@@ -8,11 +8,20 @@ from .swing_up import SwingUpController
 from .hybrid_balancer import HybridBalancer
 from .oscillation import OscillationController
 
+try:
+    import sys
+    import os
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+    from rl.rl_controller import RLBalancer
+except ImportError:
+    RLBalancer = None
+
 __all__ = [
     "BaseController",
     "PIDBalancer",
     "LQRBalancer",
     "SwingUpController",
     "HybridBalancer",
-    "OscillationController"
+    "OscillationController",
+    "RLBalancer"
 ]
