@@ -5,13 +5,14 @@ from .card_widget import CardWidget
 
 class ControlPanel(QWidget):
     """
-    Control Panel widget containing motor actuation triggers, auto-balance toggle,
-    and real-time PID gain tuning spinboxes.
+    Control Panel widget containing motor actuation triggers, HIL control mode selector
+    (PID, LQR, RL, Hybrid Swing-Up), auto-balance toggle, and real-time gain tuning spinboxes.
     """
     start_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
     balance_toggled = pyqtSignal(bool)
     tare_clicked = pyqtSignal()
+    mode_selected = pyqtSignal(str) # "PID", "LQR", "RL", "HYBRID"
     
     speed_changed = pyqtSignal(int)
     duration_changed = pyqtSignal(int)
@@ -20,6 +21,7 @@ class ControlPanel(QWidget):
     def __init__(self, initial_config: dict, parent=None):
         super().__init__(parent)
         self.is_balancing = False
+        self.active_mode = "PID"
         self.config = initial_config
         self.init_ui()
 
@@ -28,7 +30,7 @@ class ControlPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        ctrl_card = CardWidget("MOTOR & HIL CONTROL")
+        ctrl_card = CardWidget("MOTOR & HIL CONTROL STATION")
         ctrl_layout = QVBoxLayout()
         ctrl_layout.setSpacing(10)
 
@@ -62,11 +64,38 @@ class ControlPanel(QWidget):
         btn_layout.addWidget(self.btn_stop)
         ctrl_layout.addLayout(btn_layout)
 
-        # Row 1.5: Auto-Balance & Tare Buttons
+        # Row 1.5: HIL Controller Mode Selector Bar
+        lbl_mode = QLabel("SELECT BALANCING ALGORITHM (HIL ENGINE):")
+        lbl_mode.setStyleSheet("font-size: 10px; font-weight: 800; color: #555555; margin-top: 4px;")
+        ctrl_layout.addWidget(lbl_mode)
+
+        mode_layout = QHBoxLayout()
+        mode_layout.setSpacing(6)
+
+        self.btn_mode_pid = QPushButton("🔵 PID Mode")
+        self.btn_mode_lqr = QPushButton("🟣 LQR Mode")
+        self.btn_mode_rl = QPushButton("🟢 RL Policy")
+        self.btn_mode_hybrid = QPushButton("🟠 Hybrid Swing-Up")
+
+        self.mode_buttons = {
+            "PID": self.btn_mode_pid,
+            "LQR": self.btn_mode_lqr,
+            "RL": self.btn_mode_rl,
+            "HYBRID": self.btn_mode_hybrid
+        }
+
+        for mode, btn in self.mode_buttons.items():
+            btn.clicked.connect(lambda _, m=mode: self.select_mode(m))
+            mode_layout.addWidget(btn)
+
+        ctrl_layout.addLayout(mode_layout)
+        self._update_mode_button_styles()
+
+        # Row 1.8: Auto-Balance & Tare Buttons
         action_layout = QHBoxLayout()
         action_layout.setSpacing(10)
 
-        self.btn_balance = QPushButton("Start Auto-Balance (HIL)")
+        self.btn_balance = QPushButton("Start Auto-Balance [PID Mode]")
         self.btn_balance.setStyleSheet("""
             QPushButton {
                 background-color: #3498db; color: white; font-weight: bold; font-size: 15px;
@@ -193,6 +222,40 @@ class ControlPanel(QWidget):
         ctrl_card.layout.addLayout(ctrl_layout)
         layout.addWidget(ctrl_card)
 
+    def select_mode(self, mode: str):
+        self.active_mode = mode
+        self._update_mode_button_styles()
+        if not self.is_balancing:
+            self.btn_balance.setText(f"Start Auto-Balance [{mode} Mode]")
+        else:
+            self.btn_balance.setText(f"Stop Auto-Balance [{mode} Mode]")
+        self.mode_selected.emit(mode)
+
+    def _update_mode_button_styles(self):
+        colors = {
+            "PID": ("#2980b9", "#3498db"),
+            "LQR": ("#8e44ad", "#9b59b6"),
+            "RL": ("#16a085", "#1abc9c"),
+            "HYBRID": ("#d35400", "#e67e22")
+        }
+        for mode, btn in self.mode_buttons.items():
+            dark, light = colors.get(mode, ("#555555", "#777777"))
+            if mode == self.active_mode:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {dark}; color: white; font-weight: bold; font-size: 13px;
+                        border: 2px solid #000000; border-radius: 4px; padding: 8px;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #f0f0f0; color: #333333; font-weight: 600; font-size: 12px;
+                        border: 1px solid #cccccc; border-radius: 4px; padding: 7px;
+                    }}
+                    QPushButton:hover {{ background-color: {light}; color: white; }}
+                """)
+
     def _on_stop_clicked(self):
         if self.is_balancing:
             self._toggle_balance()
@@ -202,16 +265,16 @@ class ControlPanel(QWidget):
         self.is_balancing = not self.is_balancing
         self.balance_toggled.emit(self.is_balancing)
         if self.is_balancing:
-            self.btn_balance.setText("Stop Auto-Balance (HIL)")
+            self.btn_balance.setText(f"Stop Auto-Balance [{self.active_mode} Mode]")
             self.btn_balance.setStyleSheet("""
                 QPushButton {
-                    background-color: #9b59b6; color: white; font-weight: bold; font-size: 15px;
+                    background-color: #e74c3c; color: white; font-weight: bold; font-size: 15px;
                     border: none; border-radius: 4px; padding: 12px;
                 }
-                QPushButton:hover { background-color: #8e44ad; }
+                QPushButton:hover { background-color: #c0392b; }
             """)
         else:
-            self.btn_balance.setText("Start Auto-Balance (HIL)")
+            self.btn_balance.setText(f"Start Auto-Balance [{self.active_mode} Mode]")
             self.btn_balance.setStyleSheet("""
                 QPushButton {
                     background-color: #3498db; color: white; font-weight: bold; font-size: 15px;

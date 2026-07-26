@@ -1,9 +1,10 @@
 import sys
+import os
 import time
 import math
 import numpy as np
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                             QSplitter, QLabel, QGridLayout, QFrame)
+                             QSplitter, QLabel, QGridLayout, QFrame, QTabWidget)
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QFont
 import pyqtgraph as pg
@@ -12,7 +13,14 @@ from ..utils.config_loader import load_config, save_config
 from ..comms.serial_client import SerialClient
 from ..comms.protocol import cmd_motor, cmd_brake, cmd_coast, cmd_zero_tare
 from ..controllers.pid_balancer import PIDBalancer
+from ..controllers.lqr_balancer import LQRBalancer
+from ..controllers.hybrid_balancer import HybridBalancer
 from ..controllers.oscillation import OscillationController
+try:
+    from rl.rl_controller import RLBalancer
+except ImportError:
+    RLBalancer = None
+
 from .card_widget import CardWidget
 from .telemetry_canvas import TelemetryCanvas
 from .control_panel import ControlPanel
@@ -21,27 +29,34 @@ QSS_STYLE = """
 QMainWindow { background-color: #ffffff; }
 QWidget { background-color: #ffffff; color: #000000; font-family: 'Inter', 'Segoe UI', sans-serif; }
 QLabel { color: #000000; }
+QTabWidget::pane { border: 1px solid #cccccc; border-radius: 4px; background: #ffffff; }
+QTabBar::tab {
+    background: #f0f0f0; border: 1px solid #cccccc; padding: 8px 16px;
+    font-weight: bold; font-size: 13px; color: #555555; border-top-left-radius: 4px; border-top-right-radius: 4px;
+}
+QTabBar::tab:selected { background: #ffffff; color: #000000; border-bottom: 2px solid #3498db; }
+QTabBar::tab:hover { background: #e8e8e8; }
 """
 
 class MainWindow(QMainWindow):
     """
     Main Application Window for the Inverted Pendulum HIL Platform.
-    Integrates real-time CAD viewport, PyQtGraph telemetry charts, live gain tuning,
-    and the Python-hosted closed-loop balancing engine.
+    Integrates real-time CAD viewport, PyQtGraph telemetry charts (Time-Series & Phase Portrait),
+    live gain tuning, and multi-algorithm Python closed-loop balancing (PID, LQR, RL, Hybrid).
     """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Inverted Pendulum HIL Control Platform")
-        self.resize(1600, 900)
+        self.setWindowTitle("Inverted Pendulum HIL Research Station — Multi-Mode AI Control")
+        self.resize(1650, 950)
         self.setStyleSheet(QSS_STYLE)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # 1) Load Configurations
         self.config = load_config()
-
-        # 2) Initialize Controllers
         ctrl_cfg = self.config.get("control", {})
         osc_cfg = self.config.get("oscillation", {})
+
+        # 2) Initialize Modular Balancing Algorithms
         self.pid_balancer = PIDBalancer(
             kp=ctrl_cfg.get("kp", 15.0),
             ki=ctrl_cfg.get("ki", 0.0),
@@ -52,10 +67,31 @@ class MainWindow(QMainWindow):
             deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.4),
             deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 6.0)
         )
+        self.lqr_balancer = LQRBalancer(
+            q_angle=ctrl_cfg.get("q_angle", 100.0),
+            q_vel=ctrl_cfg.get("q_vel", 10.0),
+            r_gain=ctrl_cfg.get("r_gain", 1.0),
+            min_power=ctrl_cfg.get("min_motor_power", 45),
+            max_power=ctrl_cfg.get("max_motor_power", 255),
+            deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.4),
+            deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 6.0)
+        )
+        self.hybrid_balancer = HybridBalancer(
+            min_power=ctrl_cfg.get("min_motor_power", 45),
+            max_power=ctrl_cfg.get("max_motor_power", 255)
+        )
+        if RLBalancer is not None:
+            self.rl_balancer = RLBalancer(model_path=None, min_power=45, max_power=255)
+        else:
+            self.rl_balancer = None
+
         self.oscillation_ctrl = OscillationController(
             speed=osc_cfg.get("speed", 255),
             duration_ms=osc_cfg.get("duration_ms", 400)
         )
+
+        self.active_mode = "PID" # "PID", "LQR", "RL", "HYBRID"
+        self.current_action = 0
 
         # 3) Telemetry State Variables
         self.theta = 0.0
@@ -74,11 +110,12 @@ class MainWindow(QMainWindow):
         self.rate_count = 0
         self._data_dirty = False
 
-        # Ring Buffer for charting
+        # Ring Buffer for multi-channel charting
         self.history_len = 800
         self._buf_time = np.zeros(self.history_len, dtype=np.float64)
         self._buf_angle = np.zeros(self.history_len, dtype=np.float64)
         self._buf_vel = np.zeros(self.history_len, dtype=np.float64)
+        self._buf_action = np.zeros(self.history_len, dtype=np.float64)
         self._buf_idx = 0
         self._buf_count = 0
 
@@ -112,7 +149,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
 
-        # ── Left Panel: Viewport & Status ──
+        # ── Left Panel: CAD Viewport & Status ──
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -124,9 +161,9 @@ class MainWindow(QMainWindow):
         header_layout = QVBoxLayout(header_widget)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(4)
-        lbl_title = QLabel("Inverted Pendulum HIL Platform")
-        lbl_title.setStyleSheet("font-size: 32px; font-weight: 800; color: #000000; letter-spacing: -0.5px;")
-        lbl_sub = QLabel("Real-time Python Closed-Loop Control & Reinforcement Learning Station")
+        lbl_title = QLabel("Inverted Pendulum HIL Research Station")
+        lbl_title.setStyleSheet("font-size: 30px; font-weight: 800; color: #000000; letter-spacing: -0.5px;")
+        lbl_sub = QLabel("Real-time AI Control (RL/PPO, LQR, Hybrid Swing-Up, PID) & Dynamic Phase Portraits")
         lbl_sub.setStyleSheet("font-size: 13px; font-weight: 600; color: #555555;")
         header_layout.addWidget(lbl_title)
         header_layout.addWidget(lbl_sub)
@@ -154,9 +191,9 @@ class MainWindow(QMainWindow):
         sim_card.layout.addLayout(status_row)
         left_layout.addWidget(sim_card, 1)
 
-        # ── Right Panel: Controls & Charts ──
+        # ── Right Panel: Controls, Metrics & Tabbed Charts ──
         right_widget = QWidget()
-        right_widget.setFixedWidth(620)
+        right_widget.setFixedWidth(640)
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
@@ -171,8 +208,8 @@ class MainWindow(QMainWindow):
         metrics_card = CardWidget("LIVE HIL TELEMETRY METRICS")
         readout_grid = QGridLayout()
         readout_grid.setSpacing(6)
-        big_style = "font-size: 28px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
-        small_style = "font-size: 15px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
+        big_style = "font-size: 26px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
+        small_style = "font-size: 14px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
         lbl_style = "font-size: 10px; font-weight: 800; color: #555555;"
 
         lbl_dev_title = QLabel("DEVIATION FROM ZERO:")
@@ -189,17 +226,17 @@ class MainWindow(QMainWindow):
         readout_grid.addWidget(lbl_vel_title, 2, 0, 1, 2)
         readout_grid.addWidget(self.lbl_vel_val, 3, 0, 1, 2)
 
-        lbl_raw = QLabel("RAW SENSOR:")
-        lbl_raw.setStyleSheet(lbl_style)
-        self.lbl_raw_val = QLabel("—")
-        self.lbl_raw_val.setStyleSheet(small_style)
+        lbl_act_title = QLabel("MOTOR ACTION (PWM):")
+        lbl_act_title.setStyleSheet(lbl_style)
+        self.lbl_action_val = QLabel("0 [COAST]")
+        self.lbl_action_val.setStyleSheet(small_style)
         lbl_rate = QLabel("SAMPLE RATE:")
         lbl_rate.setStyleSheet(lbl_style)
         self.lbl_rate_val = QLabel("— Hz")
         self.lbl_rate_val.setStyleSheet(small_style)
-        readout_grid.addWidget(lbl_raw, 4, 0)
+        readout_grid.addWidget(lbl_act_title, 4, 0)
         readout_grid.addWidget(lbl_rate, 4, 1)
-        readout_grid.addWidget(self.lbl_raw_val, 5, 0)
+        readout_grid.addWidget(self.lbl_action_val, 5, 0)
         readout_grid.addWidget(self.lbl_rate_val, 5, 1)
 
         lbl_pa = QLabel("PEAK ANGLE:")
@@ -218,23 +255,66 @@ class MainWindow(QMainWindow):
         metrics_card.layout.addLayout(readout_grid)
         right_layout.addWidget(metrics_card)
 
-        # Deviation Chart
+        # ── RESEARCH CHARTS TAB WIDGET ──
+        self.tab_widget = QTabWidget()
+        right_layout.addWidget(self.tab_widget, 1)
+
+        # TAB 1: Time-Series Telemetry (Angle, Vel, PWM Action)
+        tab_time = QWidget()
+        tab_time_layout = QVBoxLayout(tab_time)
+        tab_time_layout.setContentsMargins(4, 8, 4, 4)
+        tab_time_layout.setSpacing(8)
+
         self.angle_card = CardWidget("DEVIATION VS TIME")
         self.angle_plot = pg.PlotWidget()
-        self.angle_curve = self._style_chart(self.angle_plot, y_label="Deviation", y_unit="°", line_color="#0066cc")
+        self.angle_curve = self._style_chart(self.angle_plot, y_label="Angle", y_unit="°", line_color="#0066cc")
         self.angle_plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#ff3333", width=1.5, style=Qt.PenStyle.DashLine)))
         self.angle_card.layout.addWidget(self.angle_plot)
-        right_layout.addWidget(self.angle_card, 1)
+        tab_time_layout.addWidget(self.angle_card, 1)
 
-        # Velocity Chart
         self.vel_card = CardWidget("VELOCITY VS TIME")
         self.vel_plot = pg.PlotWidget()
         self.vel_curve = self._style_chart(self.vel_plot, y_label="Velocity", y_unit="°/s", line_color="#cc3333")
         self.vel_plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#aaaaaa", width=1, style=Qt.PenStyle.DashLine)))
         self.vel_card.layout.addWidget(self.vel_plot)
-        right_layout.addWidget(self.vel_card, 1)
+        tab_time_layout.addWidget(self.vel_card, 1)
 
-        splitter.setSizes([980, 620])
+        self.action_card = CardWidget("MOTOR ACTION (PWM EFFORT) VS TIME")
+        self.action_plot = pg.PlotWidget()
+        self.action_curve = self._style_chart(self.action_plot, y_label="PWM Duty", y_unit="", line_color="#27ae60")
+        self.action_plot.setYRange(-260, 260)
+        self.action_plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#aaaaaa", width=1, style=Qt.PenStyle.DashLine)))
+        self.action_card.layout.addWidget(self.action_plot)
+        tab_time_layout.addWidget(self.action_card, 1)
+
+        self.tab_widget.addTab(tab_time, "📊 Time-Series Telemetry & Actuation")
+
+        # TAB 2: State-Space Phase Portrait (Angle vs Velocity)
+        tab_phase = QWidget()
+        tab_phase_layout = QVBoxLayout(tab_phase)
+        tab_phase_layout.setContentsMargins(4, 8, 4, 4)
+
+        self.phase_card = CardWidget("STATE-SPACE PHASE PORTRAIT (θ vs dθ/dt)")
+        self.phase_plot = pg.PlotWidget()
+        self.phase_plot.setBackground("#ffffff")
+        p_item = self.phase_plot.getPlotItem()
+        p_item.showGrid(x=True, y=True, alpha=0.2)
+        p_item.setLabel("bottom", "Angle Deviation (θ)", units="°", **{"font-size": "11px", "color": "#333333"})
+        p_item.setLabel("left", "Angular Velocity (dθ/dt)", units="°/s", **{"font-size": "11px", "color": "#333333"})
+        p_item.addItem(pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen("#888888", width=1, style=Qt.PenStyle.DashLine)))
+        p_item.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#888888", width=1, style=Qt.PenStyle.DashLine)))
+        
+        # Upright origin target indicator (Green dot at 0, 0)
+        target_dot = pg.ScatterPlotItem([0], [0], pen=pg.mkPen("#00aa00", width=2), brush=pg.mkBrush("#2ecc71"), size=14)
+        p_item.addItem(target_dot)
+
+        self.phase_curve = p_item.plot(pen=pg.mkPen("#8e44ad", width=2.0))
+        self.phase_card.layout.addWidget(self.phase_plot)
+        tab_phase_layout.addWidget(self.phase_card)
+
+        self.tab_widget.addTab(tab_phase, "🌀 State-Space Phase Portrait")
+
+        splitter.setSizes([980, 640])
 
     def _style_chart(self, plot, y_label="Val", y_unit="", line_color="#000000"):
         plot.setBackground("#ffffff")
@@ -264,30 +344,64 @@ class MainWindow(QMainWindow):
         self.ctrl_panel.stop_clicked.connect(self._on_stop_all)
         self.ctrl_panel.balance_toggled.connect(self._on_balance_toggled)
         self.ctrl_panel.tare_clicked.connect(self._on_tare_clicked)
+        self.ctrl_panel.mode_selected.connect(self._on_mode_selected)
         self.ctrl_panel.speed_changed.connect(lambda v: self.oscillation_ctrl.update_params({"speed": v}))
         self.ctrl_panel.duration_changed.connect(lambda v: self.oscillation_ctrl.update_params({"duration_ms": v}))
         self.ctrl_panel.pid_changed.connect(self._on_pid_changed)
 
+    def _on_mode_selected(self, mode: str):
+        self.active_mode = mode
+        print(f"[HIL MODE] Control algorithm switched to: {mode}")
+        if self.ctrl_panel.is_balancing:
+            # Switch active controller on the fly
+            self.pid_balancer.disable()
+            self.lqr_balancer.disable()
+            self.hybrid_balancer.disable()
+            if self.rl_balancer: self.rl_balancer.disable()
+            self._enable_active_controller()
+
+    def _enable_active_controller(self):
+        self.oscillation_ctrl.disable()
+        if self.active_mode == "PID":
+            self.pid_balancer.enable()
+        elif self.active_mode == "LQR":
+            self.lqr_balancer.enable()
+        elif self.active_mode == "RL":
+            if self.rl_balancer: self.rl_balancer.enable()
+            else: self.pid_balancer.enable()
+        elif self.active_mode == "HYBRID":
+            self.hybrid_balancer.enable()
+
     def _on_start_oscillation(self):
         print("[HIL MODE] Enabling Oscillation Controller...")
         self.pid_balancer.disable()
+        self.lqr_balancer.disable()
+        self.hybrid_balancer.disable()
+        if self.rl_balancer: self.rl_balancer.disable()
         self.oscillation_ctrl.enable()
 
     def _on_stop_all(self):
         print("[HIL MODE] Disabling all controllers. Braking motor...")
         self.pid_balancer.disable()
+        self.lqr_balancer.disable()
+        self.hybrid_balancer.disable()
+        if self.rl_balancer: self.rl_balancer.disable()
         self.oscillation_ctrl.disable()
+        self.current_action = 0
         if self.serial_client:
             self.serial_client.send_command(cmd_brake())
 
     def _on_balance_toggled(self, is_enabled: bool):
         if is_enabled:
-            print("[HIL MODE] Enabling Python PID Balancer...")
-            self.oscillation_ctrl.disable()
-            self.pid_balancer.enable()
+            print(f"[HIL MODE] Starting closed-loop balancing with [{self.active_mode}] engine...")
+            self._enable_active_controller()
         else:
-            print("[HIL MODE] Disabling PID Balancer. Coasting motor...")
+            print("[HIL MODE] Disabling closed-loop control. Coasting motor...")
             self.pid_balancer.disable()
+            self.lqr_balancer.disable()
+            self.hybrid_balancer.disable()
+            if self.rl_balancer: self.rl_balancer.disable()
+            self.current_action = 0
             if self.serial_client:
                 self.serial_client.send_command(cmd_coast())
 
@@ -298,7 +412,6 @@ class MainWindow(QMainWindow):
 
     def _on_pid_changed(self, params: dict):
         self.pid_balancer.update_params(params)
-        # Update config dict and save to disk
         if "control" not in self.config:
             self.config["control"] = {}
         self.config["control"].update(params)
@@ -365,41 +478,59 @@ class MainWindow(QMainWindow):
             self.rate_count = 0
             self.rate_timer = now
 
+        # ── HIL CLOSED-LOOP CONTROL EXECUTION ──
+        power = 0
+        if self.serial_client and self.serial_client.isRunning():
+            if self.ctrl_panel.is_balancing:
+                if self.active_mode == "PID":
+                    power = self.pid_balancer.compute_action(self.angle_dev, dt)
+                elif self.active_mode == "LQR":
+                    power = self.lqr_balancer.compute_action(self.angle_dev, dt)
+                elif self.active_mode == "RL":
+                    if self.rl_balancer and self.rl_balancer.enabled:
+                        power = self.rl_balancer.compute_action(self.angle_dev, dt)
+                    else:
+                        power = self.pid_balancer.compute_action(self.angle_dev, dt)
+                elif self.active_mode == "HYBRID":
+                    power = self.hybrid_balancer.compute_action(self.angle_dev, dt)
+                
+                self.serial_client.send_command(cmd_motor(power))
+                self.current_action = power
+            elif self.oscillation_ctrl.enabled:
+                power = self.oscillation_ctrl.compute_action(self.angle_dev, dt)
+                self.serial_client.send_command(cmd_motor(power))
+                self.current_action = power
+            else:
+                self.current_action = 0
+
         # Update Ring Buffer
         i = self._buf_idx % self.history_len
         self._buf_time[i] = now - self.start_time
         self._buf_angle[i] = self.angle_dev
         self._buf_vel[i] = self.vel_deg_s
+        self._buf_action[i] = float(self.current_action)
         self._buf_idx += 1
         self._buf_count = min(self._buf_count + 1, self.history_len)
         self._data_dirty = True
-
-        # ── HIL CLOSED-LOOP CONTROL EXECUTION ──
-        if self.serial_client and self.serial_client.isRunning():
-            if self.pid_balancer.enabled:
-                power = self.pid_balancer.compute_action(self.angle_dev, dt)
-                self.serial_client.send_command(cmd_motor(power))
-            elif self.oscillation_ctrl.enabled:
-                power = self.oscillation_ctrl.compute_action(self.angle_dev, dt)
-                self.serial_client.send_command(cmd_motor(power))
 
     def _get_buf_slices(self):
         count = self._buf_count
         idx = self._buf_idx
         if count < self.history_len:
-            return self._buf_time[:count], self._buf_angle[:count], self._buf_vel[:count]
+            return self._buf_time[:count], self._buf_angle[:count], self._buf_vel[:count], self._buf_action[:count]
         start = idx % self.history_len
         t = np.concatenate((self._buf_time[start:], self._buf_time[:start]))
         a = np.concatenate((self._buf_angle[start:], self._buf_angle[:start]))
         v = np.concatenate((self._buf_vel[start:], self._buf_vel[:start]))
-        return t, a, v
+        u = np.concatenate((self._buf_action[start:], self._buf_action[:start]))
+        return t, a, v, u
 
     # ── GUI Redraw Timers ──
     def tick_fast(self):
         self.elapsed_time = (time.time() - self.start_time) if self.start_time else 0.0
         self.lbl_angle_val.setText(f"{self.angle_dev:+.2f}°")
         self.lbl_vel_val.setText(f"{self.vel_deg_s:+.1f}°/s")
-        self.lbl_raw_val.setText(f"{self.raw_angle:.2f}°")
+        self.lbl_action_val.setText(f"{self.current_action:+} PWM")
         self.lbl_rate_val.setText(f"{self.sample_rate:.0f} Hz")
         self.lbl_peak_angle.setText(f"{self.peak_angle:.1f}°")
         self.lbl_peak_vel.setText(f"{self.peak_vel:.1f}°/s")
@@ -414,9 +545,15 @@ class MainWindow(QMainWindow):
     def tick_graph(self):
         if not self._data_dirty: return
         self._data_dirty = False
-        t, a, v = self._get_buf_slices()
+        t, a, v, u = self._get_buf_slices()
+        
+        # Tab 1 Curves
         self.angle_curve.setData(t, a)
         self.vel_curve.setData(t, v)
+        self.action_curve.setData(t, u)
+        
+        # Tab 2 Phase Portrait Curve
+        self.phase_curve.setData(a, v)
 
     def closeEvent(self, event):
         if self.serial_client:
@@ -425,15 +562,22 @@ class MainWindow(QMainWindow):
 
     # ── Keyboard Manual Override ──
     def keyPressEvent(self, event):
-        if event.isAutoRepeat() or self.pid_balancer.enabled or self.oscillation_ctrl.enabled:
+        if event.isAutoRepeat() or self.ctrl_panel.is_balancing or self.oscillation_ctrl.enabled:
             return
         if event.key() == Qt.Key.Key_A and self.serial_client:
-            self.serial_client.send_command(cmd_motor(-200))
+            self.serial_client.send_command(cmd_motor(255))
+            self.current_action = 255
         elif event.key() == Qt.Key.Key_D and self.serial_client:
-            self.serial_client.send_command(cmd_motor(200))
+            self.serial_client.send_command(cmd_motor(-255))
+            self.current_action = -255
+        elif event.key() == Qt.Key.Key_Space and self.serial_client:
+            self.serial_client.send_command(cmd_brake())
+            self.current_action = 0
+            print("[KEYBOARD] BRAKE applied.")
 
     def keyReleaseEvent(self, event):
-        if event.isAutoRepeat() or self.pid_balancer.enabled or self.oscillation_ctrl.enabled:
+        if event.isAutoRepeat() or self.ctrl_panel.is_balancing or self.oscillation_ctrl.enabled:
             return
         if event.key() in (Qt.Key.Key_A, Qt.Key.Key_D) and self.serial_client:
             self.serial_client.send_command(cmd_coast())
+            self.current_action = 0
