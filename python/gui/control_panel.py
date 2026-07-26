@@ -95,7 +95,7 @@ class ControlPanel(QWidget):
         # Row 1.7: Display Transformation (UI & Graphs Only)
         self.chk_invert_display = QCheckBox("Invert Displayed Angle (UI & Charts Only - Leaves Control Logic Untouched)")
         self.chk_invert_display.setStyleSheet("font-size: 11px; font-weight: bold; color: #333333; margin-top: 2px;")
-        self.chk_invert_display.setChecked(True)
+        self.chk_invert_display.setChecked(False)
         self.chk_invert_display.toggled.connect(self.invert_display_toggled.emit)
         ctrl_layout.addWidget(self.chk_invert_display)
 

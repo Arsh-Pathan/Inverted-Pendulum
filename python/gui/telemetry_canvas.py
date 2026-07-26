@@ -49,9 +49,9 @@ class TelemetryCanvas(QWidget):
             tick_outer = protractor_r
 
             x1 = cx + sin_a * tick_inner
-            y1 = cy - cos_a * tick_inner
+            y1 = cy + cos_a * tick_inner
             x2 = cx + sin_a * tick_outer
-            y2 = cy - cos_a * tick_outer
+            y2 = cy + cos_a * tick_outer
 
             if is_major:
                 painter.setPen(QPen(QColor(160, 160, 160), 1.2, Qt.PenStyle.SolidLine))
@@ -62,7 +62,7 @@ class TelemetryCanvas(QWidget):
             if is_major:
                 label_r = protractor_r + 14
                 lx = cx + sin_a * label_r
-                ly = cy - cos_a * label_r
+                ly = cy + cos_a * label_r
                 painter.setPen(QPen(QColor(140, 140, 140)))
                 text = f"{deg}°"
                 fm = painter.fontMetrics()
@@ -106,7 +106,7 @@ class TelemetryCanvas(QWidget):
         # Pendulum Rod (Black)
         pole_len = 160
         px = cx + math.sin(self.theta) * pole_len
-        py = cy - math.cos(self.theta) * pole_len
+        py = cy + math.cos(self.theta) * pole_len
 
         painter.setPen(QPen(QColor(0, 0, 0), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap))
         painter.drawLine(QPointF(cx, cy), QPointF(px, py))

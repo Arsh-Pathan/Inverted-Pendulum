@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
 
         self.active_mode = "PID" # "PID", "LQR", "RL", "HYBRID"
         self.current_action = 0
-        self.invert_display = True
+        self.invert_display = False
 
         # 3) Telemetry State Variables
         self.theta = 0.0
@@ -287,7 +287,7 @@ class MainWindow(QMainWindow):
         self.action_card.layout.addWidget(self.action_plot)
         tab_time_layout.addWidget(self.action_card, 1)
 
-        self.tab_widget.addTab(tab_time, "Time-Series Telemetry & Actuation")
+        self.tab_widget.addTab(tab_time, "Time-Series Telemetry and Actuation")
 
         # TAB 2: State-Space Phase Portrait (Angle vs Velocity)
         tab_phase = QWidget()
@@ -467,12 +467,16 @@ class MainWindow(QMainWindow):
             delta = (raw_val - self.prev_raw) % 360.0
             if delta > 180.0: delta -= 360.0
             elif delta < -180.0: delta += 360.0
-            self.vel_deg_s = delta / dt
+            vel = delta / dt
+            self.vel_deg_s = max(-2000.0, min(2000.0, vel))
         self.prev_raw = raw_val
 
+        # Shortest-path angle [-180, +180] for clean plotting and peak calculation
+        short_a = ((self.angle_dev + 180.0) % 360.0) - 180.0
+
         # Update Canvas representation
-        self.theta = math.radians(self.angle_dev)
-        self.peak_angle = max(self.peak_angle, abs(self.angle_dev))
+        self.theta = math.radians(short_a)
+        self.peak_angle = max(self.peak_angle, abs(short_a))
         self.peak_vel = max(self.peak_vel, abs(self.vel_deg_s))
 
         # Sample rate calculation
@@ -533,7 +537,8 @@ class MainWindow(QMainWindow):
     # ── GUI Redraw Timers ──
     def tick_fast(self):
         self.elapsed_time = (time.time() - self.start_time) if self.start_time else 0.0
-        disp_a = (360.0 - self.angle_dev) % 360.0 if self.invert_display else self.angle_dev
+        short_a = ((self.angle_dev + 180.0) % 360.0) - 180.0
+        disp_a = -short_a if self.invert_display else short_a
         disp_v = -self.vel_deg_s if self.invert_display else self.vel_deg_s
         self.lbl_angle_val.setText(f"{disp_a:+.2f}°")
         self.lbl_vel_val.setText(f"{disp_v:+.1f}°/s")
@@ -554,11 +559,12 @@ class MainWindow(QMainWindow):
         self._data_dirty = False
         t, a, v, u = self._get_buf_slices()
         
+        short_angles = [((x + 180.0) % 360.0) - 180.0 for x in a]
         if self.invert_display:
-            a_disp = [(360.0 - x) % 360.0 for x in a]
+            a_disp = [-x for x in short_angles]
             v_disp = [-x for x in v]
         else:
-            a_disp = a
+            a_disp = short_angles
             v_disp = v
 
         # Tab 1 Curves
