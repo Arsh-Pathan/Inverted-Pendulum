@@ -75,6 +75,7 @@ pip install -r requirements.txt
 1. Open Arduino IDE or PlatformIO and install the `AS5600` library via Library Manager.
 2. Open `firmware/esp32_endpoint/esp32_endpoint.ino`, select your ESP32 board and COM port, and upload.
    * *Note: Keep the pendulum hanging motionless during the first 2 seconds of bootup to establish hanging zero equilibrium.*
+   * *Compatibility: The firmware automatically detects and adapts to both legacy ESP32 Arduino Core v2.x and modern Core v3.0+ (ESP-IDF v5.x) LEDC PWM APIs on the fly.*
 
 ### 3. Launching the GUI Station
 To start the full graphical HIL dashboard with real-time CAD animation and PyQtGraph plots:

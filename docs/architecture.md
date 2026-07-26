@@ -25,6 +25,8 @@ graph TD
         HBridge -->|1kHz LEDC PWM| Motor[DC Gearmotor Actuator]
     end
 
+*Note on Hardware PWM Compatibility: The ESP32 endpoint firmware automatically detects your Arduino toolchain version and adapts between legacy ESP32 Core v2.x (`ledcSetup`/`ledcAttachPin`) and modern Core v3.0+ (`ledcAttach`) PWM APIs.*
+
     subgraph Host [PC Python Control Software]
         USB_TX -->|Raw Angle Float| Reader[QThread Serial Client]
         Reader -->|DirectConnection Signal| Controller[Python Controller Engine]

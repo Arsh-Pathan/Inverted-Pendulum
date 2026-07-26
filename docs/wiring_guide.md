@@ -12,7 +12,7 @@ This document outlines the physical wiring and connections between the **ESP32 M
 | **AS5600 SCL** | `GPIO 23` | I2C Clock Line (with internal/external pull-up) |
 | **TB6612FNG AIN1**| `GPIO 25` | Motor Direction Pin 1 |
 | **TB6612FNG AIN2**| `GPIO 26` | Motor Direction Pin 2 |
-| **TB6612FNG PWMA**| `GPIO 27` | Motor Speed (PWM Output @ 1 kHz) |
+| **TB6612FNG PWMA**| `GPIO 27` | Motor Speed (LEDC PWM @ 1 kHz; compatible with Core v2.x & v3.0+) |
 | **TB6612FNG STBY**| `GPIO 33` | Driver Standby Control (`HIGH` = Active, `LOW` = Standby/Sleep) |
 | **TB6612FNG VCC** | `3.3V` | Logic Voltage Supply (MUST match ESP32 logic voltage) |
 | **TB6612FNG GND** | `GND` | Common Ground (Tie ESP32 GND, TB6612 GND, and Motor Battery GND together) |

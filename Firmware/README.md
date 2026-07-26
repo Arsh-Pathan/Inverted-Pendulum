@@ -16,6 +16,18 @@ To maintain maximum code readability and clean separation of concerns, the firmw
 
 ---
 
+## ⚡ Dual ESP32 Arduino Core v2.x / v3.0+ API Support
+
+In major release v3.0.0 (based on ESP-IDF v5.x), Espressif introduced breaking changes to the LEDC hardware PWM API by removing `ledcSetup` and `ledcAttachPin`, and changing `ledcWrite` to accept a GPIO pin number instead of a channel ID.
+
+The `MotorDriver` class in this firmware automatically detects your toolchain's ESP32 Core version via `<esp_arduino_version.h>` preprocessor macros and adapts compilation on the fly:
+*   **On ESP32 Core v3.0+ (ESP-IDF v5.x):** Automatically utilizes `ledcAttach(pin, freq, resolution)` and pin-targeted `ledcWrite(pin, duty)`.
+*   **On Legacy Core v2.x (ESP-IDF v4.x):** Seamlessly falls back to `ledcSetup(channel, freq, resolution)` and `ledcAttachPin(pin, channel)`.
+
+This guarantees 100% compilation compatibility across modern Arduino IDE 2.x and legacy PlatformIO environments without manual code edits.
+
+---
+
 ## 📌 Hardware Pin Mapping
 
 | Component | Signal | ESP32 GPIO | Description |
