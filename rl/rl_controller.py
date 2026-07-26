@@ -95,6 +95,10 @@ class RLBalancer(BaseController):
             norm_action = float(action[0] if isinstance(action, (np.ndarray, list)) else action)
             output = norm_action * 255.0
 
+        # Lower Hemisphere Inversion
+        if not state.is_above_horizontal:
+            output = -output
+
         abs_output = abs(output)
         if abs_output <= 0.05:
             return 0

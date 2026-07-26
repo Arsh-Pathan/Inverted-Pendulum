@@ -79,7 +79,11 @@ class PIDBalancer(BaseController):
         if abs(error) < self.deadzone_deg and abs(self.filtered_derivative) < self.deadzone_vel:
             return 0
 
-        # 7) Linear Deadband Mapping: overcome static motor friction by mapping power from min_power up
+        # 7) Lower Hemisphere Inversion: if pendulum drops below horizontal (0 to 90 or 270 to 360 deg)
+        if not state.is_above_horizontal:
+            output = -output
+
+        # 8) Linear Deadband Mapping: overcome static motor friction by mapping power from min_power up
         abs_output = abs(output)
         if abs_output <= 0.05:
             return 0
