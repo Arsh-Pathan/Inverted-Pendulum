@@ -14,6 +14,7 @@ class ControlPanel(QWidget):
     tare_clicked = pyqtSignal()
     mode_selected = pyqtSignal(str) # "PID", "LQR", "RL", "HYBRID"
     invert_display_toggled = pyqtSignal(bool)
+    invert_motor_toggled = pyqtSignal(bool)
     
     speed_changed = pyqtSignal(int)
     duration_changed = pyqtSignal(int)
@@ -92,12 +93,18 @@ class ControlPanel(QWidget):
         ctrl_layout.addLayout(mode_layout)
         self._update_mode_button_styles()
 
-        # Row 1.7: Display Transformation (UI & Graphs Only)
+        # Row 1.7: Display & Motor Transformation Toggles
         self.chk_invert_display = QCheckBox("Invert Displayed Angle (UI & Charts Only - Leaves Control Logic Untouched)")
         self.chk_invert_display.setStyleSheet("font-size: 11px; font-weight: bold; color: #333333; margin-top: 2px;")
         self.chk_invert_display.setChecked(False)
         self.chk_invert_display.toggled.connect(self.invert_display_toggled.emit)
         ctrl_layout.addWidget(self.chk_invert_display)
+
+        self.chk_invert_motor = QCheckBox("Reverse Motor Direction (Move cart in direction of pendulum fall to balance)")
+        self.chk_invert_motor.setStyleSheet("font-size: 11px; font-weight: bold; color: #d35400; margin-top: 2px; margin-bottom: 4px;")
+        self.chk_invert_motor.setChecked(True)
+        self.chk_invert_motor.toggled.connect(self.invert_motor_toggled.emit)
+        ctrl_layout.addWidget(self.chk_invert_motor)
 
         # Row 1.8: Auto-Balance & Tare Buttons
         action_layout = QHBoxLayout()

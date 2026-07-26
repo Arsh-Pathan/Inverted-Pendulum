@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self.active_mode = "PID" # "PID", "LQR", "RL", "HYBRID"
         self.current_action = 0
         self.invert_display = False
+        self.invert_motor = True
 
         # 3) Telemetry State Variables
         self.theta = 0.0
@@ -346,6 +347,7 @@ class MainWindow(QMainWindow):
         self.ctrl_panel.tare_clicked.connect(self._on_tare_clicked)
         self.ctrl_panel.mode_selected.connect(self._on_mode_selected)
         self.ctrl_panel.invert_display_toggled.connect(self._on_invert_display_toggled)
+        self.ctrl_panel.invert_motor_toggled.connect(self._on_invert_motor_toggled)
         self.ctrl_panel.speed_changed.connect(lambda v: self.oscillation_ctrl.update_params({"speed": v}))
         self.ctrl_panel.duration_changed.connect(lambda v: self.oscillation_ctrl.update_params({"duration_ms": v}))
         self.ctrl_panel.pid_changed.connect(self._on_pid_changed)
@@ -353,6 +355,10 @@ class MainWindow(QMainWindow):
     def _on_invert_display_toggled(self, checked: bool):
         self.invert_display = checked
         print(f"[UI DISPLAY] Invert displayed angle set to: {checked}")
+
+    def _on_invert_motor_toggled(self, checked: bool):
+        self.invert_motor = checked
+        print(f"[MOTOR ACTION] Reverse motor direction set to: {checked}")
 
     def _on_mode_selected(self, mode: str):
         self.active_mode = mode
@@ -503,10 +509,14 @@ class MainWindow(QMainWindow):
                 elif self.active_mode == "HYBRID":
                     power = self.hybrid_balancer.compute_action(self.angle_dev, dt)
                 
+                if self.invert_motor:
+                    power = -power
                 self.serial_client.send_command(cmd_motor(power))
                 self.current_action = power
             elif self.oscillation_ctrl.enabled:
                 power = self.oscillation_ctrl.compute_action(self.angle_dev, dt)
+                if self.invert_motor:
+                    power = -power
                 self.serial_client.send_command(cmd_motor(power))
                 self.current_action = power
             else:
