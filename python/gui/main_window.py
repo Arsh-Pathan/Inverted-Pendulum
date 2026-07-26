@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
 
         self.active_mode = "PID" # "PID", "LQR", "RL", "HYBRID"
         self.current_action = 0
+        self.invert_display = True
 
         # 3) Telemetry State Variables
         self.theta = 0.0
@@ -286,7 +287,7 @@ class MainWindow(QMainWindow):
         self.action_card.layout.addWidget(self.action_plot)
         tab_time_layout.addWidget(self.action_card, 1)
 
-        self.tab_widget.addTab(tab_time, "📊 Time-Series Telemetry & Actuation")
+        self.tab_widget.addTab(tab_time, "Time-Series Telemetry & Actuation")
 
         # TAB 2: State-Space Phase Portrait (Angle vs Velocity)
         tab_phase = QWidget()
@@ -311,7 +312,7 @@ class MainWindow(QMainWindow):
         self.phase_card.layout.addWidget(self.phase_plot)
         tab_phase_layout.addWidget(self.phase_card)
 
-        self.tab_widget.addTab(tab_phase, "🌀 State-Space Phase Portrait")
+        self.tab_widget.addTab(tab_phase, "State-Space Phase Portrait")
 
         splitter.setSizes([980, 640])
 
@@ -344,9 +345,14 @@ class MainWindow(QMainWindow):
         self.ctrl_panel.balance_toggled.connect(self._on_balance_toggled)
         self.ctrl_panel.tare_clicked.connect(self._on_tare_clicked)
         self.ctrl_panel.mode_selected.connect(self._on_mode_selected)
+        self.ctrl_panel.invert_display_toggled.connect(self._on_invert_display_toggled)
         self.ctrl_panel.speed_changed.connect(lambda v: self.oscillation_ctrl.update_params({"speed": v}))
         self.ctrl_panel.duration_changed.connect(lambda v: self.oscillation_ctrl.update_params({"duration_ms": v}))
         self.ctrl_panel.pid_changed.connect(self._on_pid_changed)
+
+    def _on_invert_display_toggled(self, checked: bool):
+        self.invert_display = checked
+        print(f"[UI DISPLAY] Invert displayed angle set to: {checked}")
 
     def _on_mode_selected(self, mode: str):
         self.active_mode = mode
@@ -527,8 +533,10 @@ class MainWindow(QMainWindow):
     # ── GUI Redraw Timers ──
     def tick_fast(self):
         self.elapsed_time = (time.time() - self.start_time) if self.start_time else 0.0
-        self.lbl_angle_val.setText(f"{self.angle_dev:+.2f}°")
-        self.lbl_vel_val.setText(f"{self.vel_deg_s:+.1f}°/s")
+        disp_a = (360.0 - self.angle_dev) % 360.0 if self.invert_display else self.angle_dev
+        disp_v = -self.vel_deg_s if self.invert_display else self.vel_deg_s
+        self.lbl_angle_val.setText(f"{disp_a:+.2f}°")
+        self.lbl_vel_val.setText(f"{disp_v:+.1f}°/s")
         self.lbl_action_val.setText(f"{self.current_action:+} PWM")
         self.lbl_rate_val.setText(f"{self.sample_rate:.0f} Hz")
         self.lbl_peak_angle.setText(f"{self.peak_angle:.1f}°")
@@ -546,13 +554,20 @@ class MainWindow(QMainWindow):
         self._data_dirty = False
         t, a, v, u = self._get_buf_slices()
         
+        if self.invert_display:
+            a_disp = [(360.0 - x) % 360.0 for x in a]
+            v_disp = [-x for x in v]
+        else:
+            a_disp = a
+            v_disp = v
+
         # Tab 1 Curves
-        self.angle_curve.setData(t, a)
-        self.vel_curve.setData(t, v)
+        self.angle_curve.setData(t, a_disp)
+        self.vel_curve.setData(t, v_disp)
         self.action_curve.setData(t, u)
         
         # Tab 2 Phase Portrait Curve
-        self.phase_curve.setData(a, v)
+        self.phase_curve.setData(a_disp, v_disp)
 
     def closeEvent(self, event):
         if self.serial_client:
