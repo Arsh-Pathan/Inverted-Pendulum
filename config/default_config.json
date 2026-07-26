@@ -1,0 +1,28 @@
+{
+    "serial": {
+        "preferred_port": "COM3",
+        "baud_rate": 115200,
+        "timeout": 0.01,
+        "telemetry_rate_hz": 100
+    },
+    "encoder": {
+        "angle_offset": 0.0,
+        "angle_scale": 1.0,
+        "angle_invert": false
+    },
+    "control": {
+        "kp": 15.0,
+        "ki": 0.0,
+        "kd": 2.5,
+        "alpha": 0.08,
+        "control_loop_rate_hz": 100,
+        "min_motor_power": 45,
+        "max_motor_power": 255,
+        "equilibrium_deadzone_deg": 0.4,
+        "equilibrium_deadzone_vel": 6.0
+    },
+    "oscillation": {
+        "speed": 255,
+        "duration_ms": 400
+    }
+}
