@@ -133,9 +133,11 @@ class InvertedPendulumEnv:
             self.upright_steps = 0
             holding_bonus = 0.0
 
-        # Spin Penalty: strongly penalize high angular velocities and spinning (> 360 deg/s)
+        # Spin Penalty: strongly penalize spinning (> 360 deg/s) with a large fixed
+        # penalty plus an additional term that scales with how fast it is spinning,
+        # so faster/continued spins are punished increasingly harder.
         is_spinning = bool(abs(vel_deg_s) > 360.0)
-        spin_penalty = 20.0 if is_spinning else 0.0
+        spin_penalty = (50.0 + 0.15 * (abs(vel_deg_s) - 360.0)) if is_spinning else 0.0
 
         # Reward function: holding bonus minus spin penalty minus quadratic tracking costs
         reward = holding_bonus - spin_penalty - (float(theta_err**2) + 0.2 * float(vel**2) + 0.001 * float(norm_action**2))

@@ -19,6 +19,53 @@ try:
 except ImportError:
     _SB3_AVAILABLE = False
 
+
+def plot_training_curve(monitor_dir: str = "rl/logs", save_path: str = "rl/logs/training_curve.png"):
+    """Render an episode-reward learning curve from the Monitor CSV logs."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")  # Headless-safe backend
+        import matplotlib.pyplot as plt
+        from stable_baselines3.common.monitor import load_results
+        from stable_baselines3.common.results_plotter import ts2xy
+    except ImportError:
+        print("[WARN] matplotlib not available; skipping training curve. Install with: pip install matplotlib")
+        return
+
+    try:
+        results = load_results(monitor_dir)
+    except Exception as exc:
+        print(f"[WARN] Could not load Monitor results for plotting: {exc}")
+        return
+
+    if len(results) == 0:
+        print("[WARN] No episodes recorded; skipping training curve.")
+        return
+
+    x, y = ts2xy(results, "timesteps")
+
+    # Rolling mean to smooth the noisy per-episode rewards
+    window = min(50, max(1, len(y) // 10))
+    if window > 1:
+        import numpy as np
+        smoothed = np.convolve(y, np.ones(window) / window, mode="valid")
+        x_smoothed = x[window - 1:]
+    else:
+        smoothed, x_smoothed = y, x
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(x, y, alpha=0.3, color="tab:blue", label="Episode reward")
+    plt.plot(x_smoothed, smoothed, color="tab:red", linewidth=2, label=f"Rolling mean (window={window})")
+    plt.xlabel("Timesteps")
+    plt.ylabel("Episode Reward")
+    plt.title("PPO Training Curve — Inverted Pendulum")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=120)
+    plt.close()
+    print(f"Training curve saved to: {os.path.abspath(save_path)}")
+
 def train_ppo(timesteps: int = 50000, lr: float = 3e-4, hil_port: str = None, save_path: str = "rl/models/ppo_pendulum.zip"):
     if not _SB3_AVAILABLE:
         print("[ERROR] stable-baselines3 and PyTorch are required for RL training.")
@@ -36,7 +83,7 @@ def train_ppo(timesteps: int = 50000, lr: float = 3e-4, hil_port: str = None, sa
 
     # Initialize Environment
     env = InvertedPendulumEnv(serial_port=hil_port, simulated=is_simulated, max_episode_steps=500)
-    env = Monitor(env, "rl/logs")
+    env = Monitor(env, os.path.join("rl/logs", "train"))
 
     # Setup Evaluation Environment and Callback
     eval_env = InvertedPendulumEnv(simulated=True, max_episode_steps=500)
@@ -76,6 +123,10 @@ def train_ppo(timesteps: int = 50000, lr: float = 3e-4, hil_port: str = None, sa
     model.save(save_path)
     print(f"\n─── Training Complete in {duration:.1f} seconds! ───")
     print(f"Final model checkpoint saved to: {os.path.abspath(save_path)}")
+
+    # Render the learning curve from the recorded Monitor episode logs
+    print("\nGenerating training curve from episode reward logs...")
+    plot_training_curve()
     
     # Quick verification episode
     print("\nRunning 1 verification episode with trained policy...")
