@@ -16,8 +16,8 @@ class PIDBalancer(BaseController):
                  alpha: float = 0.08,
                  min_power: int = 45, 
                  max_power: int = 255,
-                 deadzone_deg: float = 0.4, 
-                 deadzone_vel: float = 6.0,
+                 deadzone_deg: float = 0.8, 
+                 deadzone_vel: float = 12.0,
                  target_angle: float = 180.0):
         super().__init__("PID Balancer")
         self.kp = kp

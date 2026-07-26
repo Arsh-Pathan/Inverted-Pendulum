@@ -465,17 +465,42 @@ class MainWindow(QMainWindow):
         if self.start_time is None:
             self.start_time = now
 
-        self.raw_angle = raw_val
-        self.angle_dev = raw_val % 360.0
+        # ── Noise Rejection: 3-tap Median Filter to reject EMI / I2C glitch spikes ──
+        if not hasattr(self, 'angle_history'):
+            self.angle_history = []
+        self.angle_history.append(raw_val)
+        if len(self.angle_history) > 3:
+            self.angle_history.pop(0)
 
-        # Wrap-aware angular velocity
+        if len(self.angle_history) == 3:
+            base = self.angle_history[-1]
+            sorted_angles = sorted(self.angle_history, key=lambda a: abs(((a - base + 180.0) % 360.0) - 180.0))
+            filtered_raw = sorted_angles[1]
+        else:
+            filtered_raw = raw_val
+
+        # ── EMA Low-Pass Filter on angle to eliminate sensor vibration chatter ──
+        if self.prev_raw is None:
+            self.smooth_raw = filtered_raw
+        else:
+            diff = ((filtered_raw - self.smooth_raw + 180.0) % 360.0) - 180.0
+            self.smooth_raw = (self.smooth_raw + 0.4 * diff) % 360.0
+
+        self.raw_angle = self.smooth_raw
+        self.angle_dev = self.smooth_raw % 360.0
+
+        # Wrap-aware and EMA smoothed angular velocity
         if self.prev_raw is not None and dt > 0:
-            delta = (raw_val - self.prev_raw) % 360.0
+            delta = (self.smooth_raw - self.prev_raw) % 360.0
             if delta > 180.0: delta -= 360.0
             elif delta < -180.0: delta += 360.0
-            vel = delta / dt
-            self.vel_deg_s = max(-2000.0, min(2000.0, vel))
-        self.prev_raw = raw_val
+            raw_vel = delta / dt
+            if not hasattr(self, 'smooth_vel'):
+                self.smooth_vel = raw_vel
+            else:
+                self.smooth_vel = (0.3 * raw_vel) + (0.7 * self.smooth_vel)
+            self.vel_deg_s = max(-2000.0, min(2000.0, self.smooth_vel))
+        self.prev_raw = self.smooth_raw
 
         # Shortest-path angle [-180, +180] for clean plotting and peak calculation
         short_a = ((self.angle_dev + 180.0) % 360.0) - 180.0
