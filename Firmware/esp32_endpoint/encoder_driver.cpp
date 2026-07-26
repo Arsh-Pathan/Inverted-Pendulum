@@ -10,32 +10,25 @@ bool EncoderDriver::begin() {
     Wire.beginTransmission(AS5600_I2C_ADDR);
     byte error = Wire.endTransmission();
     
-    if (error == 0) {
-        _initialized = true;
-        // Wait 2.5 seconds to let power rails stabilize and pendulum motionless settling
-        Serial.println("[CALIBRATION] Waiting 2.5s for pendulum to settle before zeroing...");
-        delay(2500);
-        Serial.println("[CALIBRATION] Sampling hanging zero equilibrium (300 samples)...");
-        tare(300);
-        return true;
+    if (error != 0) {
+        return false;
     }
-    return false;
+    
+    _sensor.begin(); // Initialize official AS5600 library
+    _initialized = true;
+    
+    // Wait 2.5 seconds to let power rails stabilize and pendulum motionless settling
+    Serial.println("[CALIBRATION] Waiting 2.5s for pendulum to settle before zeroing...");
+    delay(2500);
+    Serial.println("[CALIBRATION] Sampling hanging zero equilibrium (300 samples)...");
+    tare(300);
+    return true;
 }
 
 uint16_t EncoderDriver::readRawBits() {
     if (!_initialized) return 0;
-    
-    Wire.beginTransmission(AS5600_I2C_ADDR);
-    Wire.write(AS5600_REG_ANGLE_H);
-    Wire.endTransmission(false);
-    
-    Wire.requestFrom(AS5600_I2C_ADDR, 2);
-    if (Wire.available() >= 2) {
-        uint8_t highByte = Wire.read();
-        uint8_t lowByte = Wire.read();
-        return ((uint16_t)highByte << 8 | lowByte) & 0x0FFF;
-    }
-    return 0;
+    // Use official AS5600 library method for reliable register timing and hysteresis handling
+    return _sensor.readAngle();
 }
 
 float EncoderDriver::readRawAngleDeg() {

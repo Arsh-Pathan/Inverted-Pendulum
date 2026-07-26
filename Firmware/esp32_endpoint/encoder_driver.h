@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <AS5600.h>
 #include "config.h"
 
 class EncoderDriver {
@@ -47,6 +48,7 @@ public:
     float getZeroOffset() const;
 
 private:
+    AS5600 _sensor;
     float _zeroOffsetDeg;
     bool _initialized;
 };
