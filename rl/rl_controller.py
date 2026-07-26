@@ -20,15 +20,21 @@ class RLBalancer(BaseController):
     """
     def __init__(self, model_path: Optional[str] = None, algo: str = "PPO", min_power: int = 45, max_power: int = 255):
         super().__init__(f"RL Policy ({algo})")
+        if model_path is None:
+            for p in ["rl/models/ppo_pendulum.zip", "rl/models/best_model/best_model.zip", "models/ppo_pendulum.zip"]:
+                if os.path.exists(p):
+                    model_path = p
+                    break
         self.model_path = model_path
         self.algo = algo.upper()
         self.min_power = min_power
         self.max_power = max_power
         self.model = None
         self.is_loaded = False
+        self.prev_angle = None
 
-        if model_path and os.path.exists(model_path):
-            self.load_model(model_path, self.algo)
+        if self.model_path and os.path.exists(self.model_path):
+            self.load_model(self.model_path, self.algo)
 
     def load_model(self, path: str, algo: str = "PPO") -> bool:
         """Loads a saved .zip model from disk."""
@@ -62,7 +68,7 @@ class RLBalancer(BaseController):
             return False
 
     def reset(self):
-        pass
+        self.prev_angle = None
 
     def update_params(self, params: Dict[str, Any]):
         if "model_path" in params and params["model_path"] != self.model_path:
@@ -74,31 +80,47 @@ class RLBalancer(BaseController):
         if not self.enabled:
             return 0
 
-        # Construct continuous observation vector matching InvertedPendulumEnv: [error_rad, vel_rad_s]
-        err_rad = math.radians(state.error_from_upright)
-        vel_rad = math.radians(state.velocity)
-        obs = np.array([err_rad, vel_rad], dtype=np.float32)
-
-        if not self.is_loaded or self.model is None:
-            # Fallback heuristic if model is not loaded: proportional damping
-            norm_action = -float(np.clip(err_rad * 2.0 + vel_rad * 0.1, -1.0, 1.0))
-        else:
-            action, _ = self.model.predict(obs, deterministic=True)
-            norm_action = float(action[0] if isinstance(action, (np.ndarray, list)) else action)
-
-        # Map normalized action [-1.0, 1.0] to integer PWM [-255, 255] with deadband
-        abs_act = abs(norm_action)
-        if abs_act <= 0.05:
+        # Equilibrium deadzone coasting to prevent buzzing
+        if abs(state.error_from_upright) < 0.4 and abs(state.velocity) < 6.0:
             return 0
 
-        speed = self.min_power + int(abs_act * (self.max_power - self.min_power))
+        if not self.is_loaded or self.model is None:
+            # Robust state-feedback baseline when model is not loaded
+            output = (state.error_from_upright * 4.5) + (state.velocity * 0.3)
+        else:
+            err_rad = math.radians(state.error_from_upright)
+            vel_rad = math.radians(state.velocity)
+            obs = np.array([err_rad, vel_rad], dtype=np.float32)
+            action, _ = self.model.predict(obs, deterministic=True)
+            norm_action = float(action[0] if isinstance(action, (np.ndarray, list)) else action)
+            output = norm_action * 255.0
+
+        # Lower Hemisphere Inversion
+        if not state.is_above_horizontal:
+            output = -output
+
+        abs_output = abs(output)
+        if abs_output <= 0.05:
+            return 0
+
+        speed = self.min_power + int((abs_output / 255.0) * (self.max_power - self.min_power))
         speed = max(self.min_power, min(self.max_power, speed))
 
-        return speed if norm_action > 0 else -speed
+        # Align sign polarity with LQRBalancer / PIDBalancer (-speed when output > 0)
+        return -speed if output > 0 else speed
 
     def compute_action(self, angle_deg: float, dt: float) -> int:
         err = 180.0 - angle_deg
         while err > 180.0: err -= 360.0
         while err < -180.0: err += 360.0
-        state_stub = PendulumState(angle_dev=angle_deg, velocity=0.0)
+
+        raw_vel = 0.0
+        if self.prev_angle is not None and dt > 0:
+            delta = (angle_deg - self.prev_angle) % 360.0
+            if delta > 180.0: delta -= 360.0
+            elif delta < -180.0: delta += 360.0
+            raw_vel = delta / dt
+        self.prev_angle = angle_deg
+
+        state_stub = PendulumState(angle_dev=angle_deg, velocity=raw_vel)
         return self.compute_action_from_state(state_stub, dt)
