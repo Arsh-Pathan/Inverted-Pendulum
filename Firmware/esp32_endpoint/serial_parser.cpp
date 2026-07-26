@@ -63,7 +63,7 @@ void SerialParser::_processCommand(const String& cmd_raw) {
     } else if (type == 'Z') {
         _motor.coast();
         delay(50);
-        float offset = _encoder.tare(40);
+        float offset = _encoder.tare(100);
         Serial.printf("[CALIBRATED] Tare complete. Offset: %.2f deg\n", offset);
     } else {
         Serial.printf("[ERROR] Unknown command: %s\n", cmd.c_str());

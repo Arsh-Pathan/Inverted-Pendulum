@@ -12,8 +12,11 @@ bool EncoderDriver::begin() {
     
     if (error == 0) {
         _initialized = true;
-        // Perform initial tare at boot up
-        tare(20);
+        // Wait 2.5 seconds to let power rails stabilize and pendulum motionless settling
+        Serial.println("[CALIBRATION] Waiting 2.5s for pendulum to settle before zeroing...");
+        delay(2500);
+        Serial.println("[CALIBRATION] Sampling hanging zero equilibrium (300 samples)...");
+        tare(300);
         return true;
     }
     return false;
@@ -54,7 +57,7 @@ float EncoderDriver::tare(int samples) {
     float sum = 0.0f;
     for (int i = 0; i < samples; i++) {
         sum += readRawAngleDeg();
-        delay(2);
+        delay(10); // 10ms delay per sample for deep noise attenuation and vibration averaging
     }
     _zeroOffsetDeg = sum / (float)samples;
     return _zeroOffsetDeg;

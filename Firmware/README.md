@@ -52,7 +52,7 @@ When connected via USB Serial, the firmware responds to the following newline-te
 *   `C`: Open-circuit free-wheel coasting.
 *   `T,<rate_hz>`: Change telemetry streaming rate dynamically (`0` to `1000` Hz).
 *   `Q`: Query an immediate single angle float reading.
-*   `Z`: Execute on-demand tare calibration (measures 40 samples and sets hanging zero offset).
+*   `Z`: Execute on-demand tare calibration (measures 100 samples over 1 second and sets hanging zero offset).
 
 ---
 
@@ -62,4 +62,4 @@ When connected via USB Serial, the firmware responds to the following newline-te
 2. Select **ESP32 Dev Module** (or equivalent ESP32 board).
 3. Ensure baud rate is set to **115200**.
 4. Compile and upload `esp32_endpoint.ino`.
-5. Keep the pendulum hanging completely still during the first 2 seconds after reset to establish automatic zero calibration!
+5. Keep the pendulum hanging completely motionless during the ~5.5 second bootup window (2.5s settling + 3s averaging) after reset to establish high-stability hanging zero calibration!
