@@ -111,6 +111,13 @@ class Sim3DWindow(QMainWindow):
         pendulum_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "pendulum", "pendulum_model.stl"))
         assembly_fcstd = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "assembly_model.FCStd"))
 
+        # Attempt to run automated FreeCAD conversion script if installed on system
+        try:
+            from scripts.convert_fcstd import convert_fcstd_to_stl
+            convert_fcstd_to_stl(assembly_fcstd)
+        except Exception:
+            pass
+
         stl_loaded = False
         try:
             if os.path.exists(cart_stl) and os.path.exists(pendulum_stl):
