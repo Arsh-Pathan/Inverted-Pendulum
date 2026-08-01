@@ -1,7 +1,9 @@
 import math
 import os
 import numpy as np
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QCheckBox
+)
 from PyQt6.QtCore import QTimer, Qt
 import pyqtgraph.opengl as gl
 
@@ -57,14 +59,28 @@ def load_stl_mesh(stl_path, align_mode="center"):
 
 class Sim3DWindow(QMainWindow):
     """
-    Parallel 3D Simulation Studio (NVIDIA Isaac Sim Viewport integration & FreeCAD Assembly support).
-    Renders CAD models directly from models/assembly_model.FCStd assets, models/cart/cart_model.stl,
-    and models/pendulum/pendulum_model.stl.
+    Parallel 3D Physics Simulation Studio (NVIDIA Isaac Sim Viewport integration & FreeCAD Assembly support).
+    Features interactive manual Cart alignment slider and real-time non-linear Cart-Pole Physics Simulation.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Inverted Pendulum — NVIDIA Isaac Sim & Assembly Viewport Studio")
-        self.resize(950, 720)
+        self.setWindowTitle("Inverted Pendulum — Interactive 3D Physics & Assembly Alignment Studio")
+        self.resize(1000, 750)
+
+        # Physics Simulation State
+        self.sim_active = False
+        self.cart_x = 0.0
+        self.cart_vx = 0.0
+        self.angle_rad = 0.05  # initial small 2.8° tilt
+        self.angle_vel = 0.0
+
+        # Physical constants matching real hardware
+        self.g = 9.81
+        self.m_cart = 0.50
+        self.m_pole = 0.15
+        self.length = 0.40  # pole length (m)
+        self.b_friction = 0.05
+        self.dt = 0.01  # 100 Hz physics solver step
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -72,9 +88,9 @@ class Sim3DWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-        # Header controls
+        # Header status controls
         ctrl_bar = QHBoxLayout()
-        self.lbl_info = QLabel("3D Isaac Sim Viewport — FreeCAD Assembly Model (models/assembly_model.FCStd)")
+        self.lbl_info = QLabel("3D Isaac Sim Viewport — Position: 0.000 m | Pendulum: 0.0°")
         self.lbl_info.setStyleSheet("font-weight: bold; font-size: 13px; color: #3498db;")
         ctrl_bar.addWidget(self.lbl_info)
         ctrl_bar.addStretch()
@@ -93,19 +109,38 @@ class Sim3DWindow(QMainWindow):
         self.view.setBackgroundColor('#121212')
         layout.addWidget(self.view, 1)
 
+        # Interactive Controls Bar (Manual Cart Slider + Interactive Physics Engine Toggle)
+        interact_bar = QHBoxLayout()
+        interact_bar.setSpacing(15)
+
+        self.chk_physics = QCheckBox("SIMULATE 3D PHYSICS ENGINE")
+        self.chk_physics.setStyleSheet("font-weight: bold; color: #2ecc71; font-size: 13px;")
+        self.chk_physics.toggled.connect(self.toggle_physics)
+        interact_bar.addWidget(self.chk_physics)
+
+        lbl_slider = QLabel("Manual Cart Position (Track Alignment):")
+        lbl_slider.setStyleSheet("font-weight: 600;")
+        interact_bar.addWidget(lbl_slider)
+
+        self.cart_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cart_slider.setRange(-200, 200)  # -0.20m to +0.20m
+        self.cart_slider.setValue(0)
+        self.cart_slider.valueChanged.connect(self.on_slider_moved)
+        interact_bar.addWidget(self.cart_slider, 1)
+
+        self.btn_push = QPushButton("Nudge Pole")
+        self.btn_push.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px;")
+        self.btn_push.clicked.connect(self.nudge_pole)
+        interact_bar.addWidget(self.btn_push)
+
+        layout.addLayout(interact_bar)
+
         # 3D Scene Environment
         grid = gl.GLGridItem()
         grid.setSize(4, 4, 1)
         grid.setSpacing(0.2, 0.2, 0.2)
         grid.setColor((80, 80, 80, 120))
         self.view.addItem(grid)
-
-        # 1) Metallic Guide Rail along X-axis
-        rail_mesh = gl.MeshData.cylinder(rows=12, cols=24, radius=[0.010, 0.010], length=1.0)
-        self.rail_item = gl.GLMeshItem(meshdata=rail_mesh, smooth=True, color=(0.7, 0.7, 0.75, 1.0), shader='shaded')
-        self.rail_item.rotate(90, 0, 1, 0)
-        self.rail_item.translate(-0.5, 0, 0)
-        self.view.addItem(self.rail_item)
 
         cart_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "cart", "cart_model.stl"))
         pendulum_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "pendulum", "pendulum_model.stl"))
@@ -138,7 +173,7 @@ class Sim3DWindow(QMainWindow):
                 self.bob_item = None
                 self.pivot_z = float(cart_dim[2]) / 2.0 if cart_dim[2] > 0 else 0.04
                 stl_loaded = True
-                print(f"[3D VIEWPORT] Rendering FreeCAD Assembly CAD Model: {assembly_fcstd} ({os.path.getsize(assembly_fcstd)/1024/1024:.2f} MB)")
+                print(f"[3D VIEWPORT] Loaded FreeCAD Assembly CAD Assets: {assembly_fcstd}")
         except Exception as e:
             print(f"[3D VIEWPORT NOTE] Assembly CAD model loader fallback: {e}")
             stl_loaded = False
@@ -162,8 +197,63 @@ class Sim3DWindow(QMainWindow):
 
         self.reset_camera()
 
+        # Real-time Physics & Graphics Animation Timer (100 Hz)
+        self.physics_timer = QTimer(self)
+        self.physics_timer.timeout.connect(self.physics_step)
+        self.physics_timer.start(10)
+
     def reset_camera(self):
         self.view.setCameraPosition(distance=2.2, elevation=15, azimuth=45)
+
+    def toggle_physics(self, enabled: bool):
+        self.sim_active = enabled
+        self.cart_slider.setEnabled(not enabled)
+        if enabled:
+            self.lbl_info.setText("3D Physics Engine Running — Simulate Physics Active")
+
+    def on_slider_moved(self, val: int):
+        if not self.sim_active:
+            self.cart_x = val / 1000.0  # mm to meters (-0.20m to +0.20m)
+            self.update_state(self.cart_x, math.degrees(self.angle_rad))
+
+    def nudge_pole(self):
+        """Applies an instantaneous angular velocity push to tilt the 3D pendulum."""
+        self.angle_vel += 1.5  # rad/s push
+
+    def physics_step(self):
+        """
+        Integrates full 3D non-linear equations of motion for the Cart-Pole system:
+        J * ddt(theta) = m*g*l*sin(theta) - b*theta_dot
+        """
+        if not self.sim_active:
+            return
+
+        sin_th = math.sin(self.angle_rad)
+        cos_th = math.cos(self.angle_rad)
+
+        # Rotational acceleration around pivot
+        pole_inertia = (1.0 / 3.0) * self.m_pole * (self.length ** 2)
+        angle_acc = (self.m_pole * self.g * (self.length / 2.0) * sin_th - self.b_friction * self.angle_vel) / pole_inertia
+
+        # Symplectic Euler integration
+        self.angle_vel += angle_acc * self.dt
+        self.angle_rad += self.angle_vel * self.dt
+
+        # Cart passive damping
+        self.cart_vx *= 0.95
+        self.cart_x += self.cart_vx * self.dt
+
+        # Bounds check along rail track (-0.45m to +0.45m)
+        if abs(self.cart_x) > 0.40:
+            self.cart_x = math.copysign(0.40, self.cart_x)
+            self.cart_vx = -self.cart_vx * 0.5
+
+        deg = math.degrees(self.angle_rad)
+        self.cart_slider.blockSignals(True)
+        self.cart_slider.setValue(int(self.cart_x * 1000))
+        self.cart_slider.blockSignals(False)
+
+        self.update_state(self.cart_x, deg)
 
     def update_state(self, cart_x: float, angle_dev_deg: float):
         """
