@@ -617,12 +617,26 @@ class MainWindow(QMainWindow):
         rl_ctrl_layout.addWidget(self.rl_save_path_edit)
         
         self.btn_start_rl = QPushButton("START RL TRAINING")
-        self.btn_start_rl.setStyleSheet("background-color: #27ae60; font-weight: bold; padding: 10px;")
+        self.btn_start_rl.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60; color: white; font-weight: 700; font-size: 13px;
+                border: 1px solid #1e8449; border-radius: 6px; padding: 12px;
+            }
+            QPushButton:hover { background-color: #2ecc71; border-color: #27ae60; }
+            QPushButton:disabled { background-color: #555555; color: #888888; border-color: #444444; }
+        """)
         self.btn_start_rl.clicked.connect(self._on_start_rl_training)
         rl_ctrl_layout.addWidget(self.btn_start_rl)
         
         self.btn_stop_rl = QPushButton("STOP TRAINING")
-        self.btn_stop_rl.setStyleSheet("background-color: #c0392b; font-weight: bold; padding: 10px;")
+        self.btn_stop_rl.setStyleSheet("""
+            QPushButton {
+                background-color: #c0392b; color: white; font-weight: 700; font-size: 13px;
+                border: 1px solid #922b21; border-radius: 6px; padding: 12px;
+            }
+            QPushButton:hover { background-color: #e74c3c; border-color: #c0392b; }
+            QPushButton:disabled { background-color: #555555; color: #888888; border-color: #444444; }
+        """)
         self.btn_stop_rl.setEnabled(False)
         self.btn_stop_rl.clicked.connect(self._on_stop_rl_training)
         rl_ctrl_layout.addWidget(self.btn_stop_rl)
