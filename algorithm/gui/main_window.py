@@ -1,9 +1,12 @@
 import time
 import math
 import numpy as np
+import os
+import io
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                             QSplitter, QLabel, QGridLayout, QFrame, QTabWidget, QPushButton)
-from PyQt6.QtCore import QTimer, Qt
+                             QSplitter, QLabel, QGridLayout, QFrame, QTabWidget, QPushButton,
+                             QComboBox, QSpinBox, QLineEdit, QProgressBar, QTextEdit)
+from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 import pyqtgraph as pg
 
@@ -18,6 +21,110 @@ try:
     from rl.rl_controller import RLBalancer
 except ImportError:
     RLBalancer = None
+
+try:
+    from stable_baselines3 import PPO, SAC, TD3
+    from stable_baselines3.common.callbacks import BaseCallback
+    from stable_baselines3.common.monitor import Monitor
+    _SB3_AVAILABLE = True
+except ImportError:
+    _SB3_AVAILABLE = False
+    class BaseCallback:
+        pass
+
+class GUITrainingCallback(BaseCallback):
+    def __init__(self, worker, verbose=0):
+        super().__init__(verbose)
+        self.worker = worker
+
+    def _on_step(self) -> bool:
+        if self.worker.is_stopped:
+            return False
+            
+        self.worker.progress_signal.emit(self.num_timesteps)
+        
+        if "infos" in self.locals:
+            for info in self.locals["infos"]:
+                if "episode" in info:
+                    ep_reward = info["episode"]["r"]
+                    self.worker.reward_signal.emit(self.num_timesteps, float(ep_reward))
+                    
+        return True
+
+class RLTrainingWorker(QThread):
+    progress_signal = pyqtSignal(int)
+    reward_signal = pyqtSignal(int, float)
+    log_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, algo, timesteps, save_path):
+        super().__init__()
+        self.algo = algo
+        self.timesteps = timesteps
+        self.save_path = save_path
+        self.is_stopped = False
+
+    def run(self):
+        import sys
+        import contextlib
+
+        class StreamLogger(io.StringIO):
+            def __init__(self, signal):
+                super().__init__()
+                self.signal = signal
+
+            def write(self, s):
+                if s.strip():
+                    self.signal.emit(s.strip())
+                pass
+
+        stream = StreamLogger(self.log_signal)
+        
+        try:
+            with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                self._train()
+        except Exception as e:
+            self.error_signal.emit(str(e))
+        
+    def _train(self):
+        if not _SB3_AVAILABLE:
+            raise RuntimeError("stable-baselines3 is not installed.")
+        
+        print(f"Starting {self.algo} training for {self.timesteps} timesteps...")
+        os.makedirs(os.path.dirname(self.save_path) or ".", exist_ok=True)
+        
+        from algorithm.math.envs.inverted_pendulum_env import InvertedPendulumEnv
+        
+        env = InvertedPendulumEnv(simulated=True, max_episode_steps=1000)
+        env = Monitor(env)
+        
+        if self.algo == "PPO":
+            model = PPO("MlpPolicy", env, verbose=1)
+        elif self.algo == "SAC":
+            model = SAC("MlpPolicy", env, verbose=1)
+        elif self.algo == "TD3":
+            from stable_baselines3.common.noise import NormalActionNoise
+            import numpy as np
+            n_actions = env.action_space.shape[-1]
+            action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
+            model = TD3("MlpPolicy", env, action_noise=action_noise, verbose=1)
+        else:
+            raise ValueError(f"Unknown algorithm: {self.algo}")
+
+        callback = GUITrainingCallback(self)
+        model.learn(total_timesteps=self.timesteps, callback=callback)
+        
+        if not self.is_stopped:
+            model.save(self.save_path)
+            print(f"Model saved to {self.save_path}")
+            self.finished_signal.emit(self.save_path)
+        else:
+            print("Training stopped manually.")
+            self.finished_signal.emit("")
+            
+    def stop(self):
+        self.is_stopped = True
 
 from .card_widget import CardWidget
 from .telemetry_canvas import TelemetryCanvas
@@ -460,6 +567,65 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(tab_stats, "Performance Analytics")
 
+        # TAB 5: RL Training Studio
+        tab_rl = QWidget()
+        tab_rl_layout = QHBoxLayout(tab_rl)
+        tab_rl_layout.setContentsMargins(4, 8, 4, 4)
+        tab_rl_layout.setSpacing(12)
+        
+        rl_ctrl_panel = QWidget()
+        rl_ctrl_panel.setFixedWidth(300)
+        rl_ctrl_layout = QVBoxLayout(rl_ctrl_panel)
+        
+        rl_ctrl_layout.addWidget(QLabel("Algorithm:"))
+        self.rl_algo_combo = QComboBox()
+        self.rl_algo_combo.addItems(["PPO", "SAC", "TD3"])
+        rl_ctrl_layout.addWidget(self.rl_algo_combo)
+        
+        rl_ctrl_layout.addWidget(QLabel("Timesteps:"))
+        self.rl_timesteps_spin = QSpinBox()
+        self.rl_timesteps_spin.setRange(10000, 500000)
+        self.rl_timesteps_spin.setSingleStep(10000)
+        self.rl_timesteps_spin.setValue(50000)
+        rl_ctrl_layout.addWidget(self.rl_timesteps_spin)
+        
+        rl_ctrl_layout.addWidget(QLabel("Save Path:"))
+        self.rl_save_path_edit = QLineEdit("rl/models/ppo_pendulum.zip")
+        rl_ctrl_layout.addWidget(self.rl_save_path_edit)
+        
+        self.btn_start_rl = QPushButton("START RL TRAINING")
+        self.btn_start_rl.setStyleSheet("background-color: #27ae60; font-weight: bold; padding: 10px;")
+        self.btn_start_rl.clicked.connect(self._on_start_rl_training)
+        rl_ctrl_layout.addWidget(self.btn_start_rl)
+        
+        self.btn_stop_rl = QPushButton("STOP TRAINING")
+        self.btn_stop_rl.setStyleSheet("background-color: #c0392b; font-weight: bold; padding: 10px;")
+        self.btn_stop_rl.setEnabled(False)
+        self.btn_stop_rl.clicked.connect(self._on_stop_rl_training)
+        rl_ctrl_layout.addWidget(self.btn_stop_rl)
+        
+        self.rl_progress = QProgressBar()
+        self.rl_progress.setRange(0, 50000)
+        rl_ctrl_layout.addWidget(self.rl_progress)
+        
+        rl_ctrl_layout.addStretch()
+        tab_rl_layout.addWidget(rl_ctrl_panel)
+        
+        rl_view_panel = QWidget()
+        rl_view_layout = QVBoxLayout(rl_view_panel)
+        
+        self.rl_plot = pg.PlotWidget(title="Training Reward")
+        self.rl_curve = self._style_chart(self.rl_plot, y_label="Episode Reward", line_color="#8e44ad")
+        rl_view_layout.addWidget(self.rl_plot, 2)
+        
+        self.rl_log = QTextEdit()
+        self.rl_log.setReadOnly(True)
+        self.rl_log.setStyleSheet("background-color: #ffffff; color: #000000; font-family: Consolas;")
+        rl_view_layout.addWidget(self.rl_log, 1)
+        
+        tab_rl_layout.addWidget(rl_view_panel, 1)
+        self.tab_widget.addTab(tab_rl, "RL Training Studio")
+
         # Charts area (right) stretches; fixed-width sidebar (left) holds viewport + controls.
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -481,6 +647,8 @@ class MainWindow(QMainWindow):
             self.cumreward_plot.setBackground("#1e1e1e")
             self.hist_err_plot.setBackground("#1e1e1e")
             self.hist_pwm_plot.setBackground("#1e1e1e")
+            self.rl_plot.setBackground("#1e1e1e")
+            self.rl_log.setStyleSheet("background-color: #1e1e1e; color: #00ff00; font-family: Consolas;")
         else:
             self.setStyleSheet(QSS_STYLE)
             self.btn_dark_mode.setText("Dark Mode")
@@ -494,6 +662,8 @@ class MainWindow(QMainWindow):
             self.cumreward_plot.setBackground("#ffffff")
             self.hist_err_plot.setBackground("#ffffff")
             self.hist_pwm_plot.setBackground("#ffffff")
+            self.rl_plot.setBackground("#ffffff")
+            self.rl_log.setStyleSheet("background-color: #ffffff; color: #000000; font-family: Consolas;")
 
     def _style_chart(self, plot, y_label="Val", y_unit="", line_color="#000000"):
         plot.setBackground("#ffffff")
@@ -611,6 +781,73 @@ class MainWindow(QMainWindow):
         # Firmware owns zero-referencing: the 'Z' command re-tares on-device.
         if self.serial_client:
             self.serial_client.send_command(cmd_zero_tare())
+
+    def _on_start_rl_training(self):
+        algo = self.rl_algo_combo.currentText()
+        timesteps = self.rl_timesteps_spin.value()
+        save_path = self.rl_save_path_edit.text()
+        
+        self.rl_progress.setRange(0, timesteps)
+        self.rl_progress.setValue(0)
+        self.rl_log.clear()
+        self.rl_log.append(f"Initializing {algo} training...")
+        
+        self.rl_times = []
+        self.rl_rewards = []
+        self.rl_curve.setData(self.rl_times, self.rl_rewards)
+        
+        self.btn_start_rl.setEnabled(False)
+        self.btn_stop_rl.setEnabled(True)
+        
+        self.rl_worker = RLTrainingWorker(algo, timesteps, save_path)
+        self.rl_worker.progress_signal.connect(self._on_rl_progress)
+        self.rl_worker.reward_signal.connect(self._on_rl_reward)
+        self.rl_worker.log_signal.connect(self._on_rl_log)
+        self.rl_worker.finished_signal.connect(self._on_rl_finished)
+        self.rl_worker.error_signal.connect(self._on_rl_error)
+        self.rl_worker.start()
+
+    def _on_stop_rl_training(self):
+        if hasattr(self, "rl_worker") and self.rl_worker.isRunning():
+            self.rl_log.append("Stop requested. Waiting for current epoch to finish...")
+            self.rl_worker.stop()
+            self.btn_stop_rl.setEnabled(False)
+
+    def _on_rl_progress(self, current_step):
+        self.rl_progress.setValue(current_step)
+
+    def _on_rl_reward(self, current_step, reward):
+        self.rl_times.append(current_step)
+        self.rl_rewards.append(reward)
+        self.rl_curve.setData(self.rl_times, self.rl_rewards)
+
+    def _on_rl_log(self, text):
+        self.rl_log.append(text)
+        scrollbar = self.rl_log.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _on_rl_finished(self, model_path):
+        self.btn_start_rl.setEnabled(True)
+        self.btn_stop_rl.setEnabled(False)
+        
+        if model_path and os.path.exists(model_path):
+            self.rl_log.append(f"Training completed successfully! Model saved at {model_path}")
+            if self.rl_balancer:
+                try:
+                    self.rl_balancer.load_model(model_path)
+                    self.rl_log.append("Success: Model loaded into RL balancer.")
+                    self.rl_log.append("You can now select 'RL' and click 'Start Auto-Balance [RL Mode]'.")
+                except Exception as e:
+                    self.rl_log.append(f"Error loading model into balancer: {e}")
+            else:
+                self.rl_log.append("Warning: RLBalancer is not available.")
+        else:
+            self.rl_log.append("Training stopped or failed.")
+
+    def _on_rl_error(self, err_msg):
+        self.btn_start_rl.setEnabled(True)
+        self.btn_stop_rl.setEnabled(False)
+        self.rl_log.append(f"ERROR: {err_msg}")
 
     def _on_pid_changed(self, params: dict):
         self.pid_balancer.update_params(params)
