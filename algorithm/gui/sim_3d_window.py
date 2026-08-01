@@ -1,4 +1,5 @@
 import math
+import os
 import numpy as np
 from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 from PyQt6.QtCore import QTimer, Qt
@@ -8,6 +9,7 @@ class Sim3DWindow(QMainWindow):
     """
     Parallel 3D Simulation & Viewport Window for the Inverted Pendulum.
     Renders 3D mesh representations (cart, rail, pivot, pole) driven by live physics or HIL telemetry.
+    Supports loading STL CAD models when stl package is available.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,27 +51,60 @@ class Sim3DWindow(QMainWindow):
         grid.setColor((100, 100, 100, 100))
         self.view.addItem(grid)
 
-        # 2) Physical Rail (thin metallic cylinder along X)
-        rail_mesh = gl.MeshData.cylinder(rows=10, cols=20, radius=0.012, length=1.0)
-        self.rail_item = gl.GLMeshItem(meshdata=rail_mesh, smooth=True, color=(0.7, 0.7, 0.7, 1.0), shader='shaded')
-        self.rail_item.rotate(90, 0, 1, 0)
-        self.rail_item.translate(-0.5, 0, 0)
-        self.view.addItem(self.rail_item)
+        # Check for STL models in models/cart/cart_model.stl and models/pendulum/pendulum_model.stl
+        cart_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "cart", "cart_model.stl"))
+        pendulum_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "pendulum", "pendulum_model.stl"))
 
-        # 3) Cart (Cuboid mesh)
-        cart_mesh = gl.MeshData.cube(x=0.16, y=0.10, z=0.08)
-        self.cart_item = gl.GLMeshItem(meshdata=cart_mesh, smooth=True, color=(0.2, 0.6, 0.9, 1.0), shader='shaded')
-        self.view.addItem(self.cart_item)
+        stl_loaded = False
+        try:
+            from stl import mesh
+            if os.path.exists(cart_stl) and os.path.exists(pendulum_stl):
+                # Load Cart STL
+                c_mesh = mesh.Mesh.from_file(cart_stl)
+                cart_verts = c_mesh.vectors.reshape(-1, 3) * 0.001 # mm to meters
+                cart_faces = np.arange(len(cart_verts)).reshape(-1, 3)
+                cart_meshdata = gl.MeshData(vertexes=cart_verts, faces=cart_faces)
+                self.cart_item = gl.GLMeshItem(meshdata=cart_meshdata, smooth=True, color=(0.2, 0.6, 0.9, 1.0), shader='shaded')
+                self.view.addItem(self.cart_item)
 
-        # 4) Pendulum Pole (Cylinder)
-        pole_mesh = gl.MeshData.cylinder(rows=10, cols=20, radius=0.008, length=0.40)
-        self.pole_item = gl.GLMeshItem(meshdata=pole_mesh, smooth=True, color=(0.9, 0.3, 0.2, 1.0), shader='shaded')
-        self.view.addItem(self.pole_item)
+                # Load Pendulum STL
+                p_mesh = mesh.Mesh.from_file(pendulum_stl)
+                p_verts = p_mesh.vectors.reshape(-1, 3) * 0.001 # mm to meters
+                p_faces = np.arange(len(p_verts)).reshape(-1, 3)
+                p_meshdata = gl.MeshData(vertexes=p_verts, faces=p_faces)
+                self.pole_item = gl.GLMeshItem(meshdata=p_meshdata, smooth=True, color=(0.9, 0.3, 0.2, 1.0), shader='shaded')
+                self.view.addItem(self.pole_item)
 
-        # 5) Bob/Tip Mass (Sphere)
-        bob_mesh = gl.MeshData.sphere(rows=10, cols=20, radius=0.02)
-        self.bob_item = gl.GLMeshItem(meshdata=bob_mesh, smooth=True, color=(0.95, 0.8, 0.2, 1.0), shader='shaded')
-        self.view.addItem(self.bob_item)
+                self.bob_item = None
+                stl_loaded = True
+                print("[3D VIEWPORT] Successfully loaded custom STL CAD models from models/ directory!")
+        except Exception as e:
+            print(f"[3D VIEWPORT NOTE] Custom STL mesh loader fallback: {e}")
+            stl_loaded = False
+
+        if not stl_loaded:
+            # Fallback procedurally generated meshes using pyqtgraph gl.MeshData
+            # 2) Physical Rail (thin metallic cylinder along X)
+            rail_mesh = gl.MeshData.cylinder(rows=10, cols=20, radius=[0.012, 0.012], length=1.0)
+            self.rail_item = gl.GLMeshItem(meshdata=rail_mesh, smooth=True, color=(0.7, 0.7, 0.7, 1.0), shader='shaded')
+            self.rail_item.rotate(90, 0, 1, 0)
+            self.rail_item.translate(-0.5, 0, 0)
+            self.view.addItem(self.rail_item)
+
+            # 3) Cart (Cuboid mesh)
+            cart_mesh = gl.MeshData.cube(x=0.16, y=0.10, z=0.08)
+            self.cart_item = gl.GLMeshItem(meshdata=cart_mesh, smooth=True, color=(0.2, 0.6, 0.9, 1.0), shader='shaded')
+            self.view.addItem(self.cart_item)
+
+            # 4) Pendulum Pole (Cylinder)
+            pole_mesh = gl.MeshData.cylinder(rows=10, cols=20, radius=[0.008, 0.008], length=0.40)
+            self.pole_item = gl.GLMeshItem(meshdata=pole_mesh, smooth=True, color=(0.9, 0.3, 0.2, 1.0), shader='shaded')
+            self.view.addItem(self.pole_item)
+
+            # 5) Bob/Tip Mass (Sphere)
+            bob_mesh = gl.MeshData.sphere(rows=10, cols=20, radius=0.02)
+            self.bob_item = gl.GLMeshItem(meshdata=bob_mesh, smooth=True, color=(0.95, 0.8, 0.2, 1.0), shader='shaded')
+            self.view.addItem(self.bob_item)
 
         self.reset_camera()
 
@@ -82,7 +117,6 @@ class Sim3DWindow(QMainWindow):
         cart_x: position along rail (-0.20 to +0.20 m)
         angle_dev_deg: deviation from upright (0° = upright)
         """
-        # Clamp cart_x visually to rail length
         cx = max(-0.45, min(0.45, cart_x))
         th_rad = math.radians(angle_dev_deg)
 
@@ -92,18 +126,15 @@ class Sim3DWindow(QMainWindow):
 
         # Pendulum Pole pivot sits at top of cart (cx, 0, 0.04)
         self.pole_item.resetTransform()
-        # Translate to pivot position
         self.pole_item.translate(cx, 0, 0.04)
-        # Rotate pole according to tilt angle
-        # Positive angle_dev tilts pole in +X direction
         self.pole_item.rotate(angle_dev_deg, 0, 1, 0)
-        # Offset cylinder alignment so it rotates from base pivot
         self.pole_item.rotate(90, 0, 1, 0)
 
-        # Tip Bob position at length L = 0.40 m from pivot
-        bx = cx + 0.40 * math.sin(th_rad)
-        bz = 0.04 + 0.40 * math.cos(th_rad)
-        self.bob_item.resetTransform()
-        self.bob_item.translate(bx, 0, bz)
+        # Tip Bob position if using procedurally generated bob
+        if self.bob_item is not None:
+            bx = cx + 0.40 * math.sin(th_rad)
+            bz = 0.04 + 0.40 * math.cos(th_rad)
+            self.bob_item.resetTransform()
+            self.bob_item.translate(bx, 0, bz)
 
         self.lbl_info.setText(f"3D Viewport — Cart Position: {cx:+.3f} m | Pendulum Deviation: {angle_dev_deg:+.1f}°")
