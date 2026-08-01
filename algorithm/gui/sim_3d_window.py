@@ -5,11 +5,49 @@ from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLab
 from PyQt6.QtCore import QTimer, Qt
 import pyqtgraph.opengl as gl
 
+def create_cube_mesh(xlen=0.16, ylen=0.10, zlen=0.08):
+    """Generates a cuboid MeshData for pyqtgraph GLMeshItem."""
+    dx, dy, dz = xlen / 2.0, ylen / 2.0, zlen / 2.0
+    vertices = np.array([
+        [-dx, -dy, -dz], [ dx, -dy, -dz], [ dx,  dy, -dz], [-dx,  dy, -dz],
+        [-dx, -dy,  dz], [ dx, -dy,  dz], [ dx,  dy,  dz], [-dx,  dy,  dz]
+    ], dtype=np.float32)
+    faces = np.array([
+        [0, 1, 2], [0, 2, 3],  # Bottom
+        [4, 5, 6], [4, 6, 7],  # Top
+        [0, 1, 5], [0, 5, 4],  # Front
+        [2, 3, 7], [2, 7, 6],  # Back
+        [0, 3, 7], [0, 7, 4],  # Left
+        [1, 2, 6], [1, 6, 5]   # Right
+    ], dtype=np.uint32)
+    return gl.MeshData(vertexes=vertices, faces=faces)
+
+def load_stl_mesh(stl_path):
+    """Loads binary or ASCII STL CAD files into pyqtgraph MeshData."""
+    try:
+        from stl import mesh
+        stl_data = mesh.Mesh.from_file(stl_path)
+        verts = stl_data.vectors.reshape(-1, 3) * 0.001  # Convert mm to meters
+        faces = np.arange(len(verts)).reshape(-1, 3)
+        return gl.MeshData(vertexes=verts, faces=faces)
+    except Exception:
+        # Simple binary STL parser fallback if numpy-stl is unavailable
+        with open(stl_path, 'rb') as f:
+            f.seek(80) # Skip header
+            n_triangles = np.frombuffer(f.read(4), dtype=np.uint32)[0]
+            tri_data = np.frombuffer(f.read(), dtype=np.float32)
+            # Each triangle has 12 floats (3 normal, 9 vertices) + 2 bytes attribute
+            record_dtype = np.dtype([('normal', 'f4', (3,)), ('verts', 'f4', (3, 3)), ('attr', 'u2')])
+            records = np.frombuffer(f.read(), dtype=record_dtype)
+            verts = records['verts'].reshape(-1, 3) * 0.001
+            faces = np.arange(len(verts)).reshape(-1, 3)
+            return gl.MeshData(vertexes=verts, faces=faces)
+
 class Sim3DWindow(QMainWindow):
     """
     Parallel 3D Simulation & Viewport Window for the Inverted Pendulum.
     Renders 3D mesh representations (cart, rail, pivot, pole) driven by live physics or HIL telemetry.
-    Supports loading STL CAD models when stl package is available.
+    Automatically loads physical STL CAD models from models/ directory.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,27 +95,18 @@ class Sim3DWindow(QMainWindow):
 
         stl_loaded = False
         try:
-            from stl import mesh
             if os.path.exists(cart_stl) and os.path.exists(pendulum_stl):
-                # Load Cart STL
-                c_mesh = mesh.Mesh.from_file(cart_stl)
-                cart_verts = c_mesh.vectors.reshape(-1, 3) * 0.001 # mm to meters
-                cart_faces = np.arange(len(cart_verts)).reshape(-1, 3)
-                cart_meshdata = gl.MeshData(vertexes=cart_verts, faces=cart_faces)
+                cart_meshdata = load_stl_mesh(cart_stl)
                 self.cart_item = gl.GLMeshItem(meshdata=cart_meshdata, smooth=True, color=(0.2, 0.6, 0.9, 1.0), shader='shaded')
                 self.view.addItem(self.cart_item)
 
-                # Load Pendulum STL
-                p_mesh = mesh.Mesh.from_file(pendulum_stl)
-                p_verts = p_mesh.vectors.reshape(-1, 3) * 0.001 # mm to meters
-                p_faces = np.arange(len(p_verts)).reshape(-1, 3)
-                p_meshdata = gl.MeshData(vertexes=p_verts, faces=p_faces)
-                self.pole_item = gl.GLMeshItem(meshdata=p_meshdata, smooth=True, color=(0.9, 0.3, 0.2, 1.0), shader='shaded')
+                pendulum_meshdata = load_stl_mesh(pendulum_stl)
+                self.pole_item = gl.GLMeshItem(meshdata=pendulum_meshdata, smooth=True, color=(0.9, 0.3, 0.2, 1.0), shader='shaded')
                 self.view.addItem(self.pole_item)
 
                 self.bob_item = None
                 stl_loaded = True
-                print("[3D VIEWPORT] Successfully loaded custom STL CAD models from models/ directory!")
+                print("[3D VIEWPORT] Successfully loaded physical CAD STL models from models/ directory!")
         except Exception as e:
             print(f"[3D VIEWPORT NOTE] Custom STL mesh loader fallback: {e}")
             stl_loaded = False
@@ -91,8 +120,8 @@ class Sim3DWindow(QMainWindow):
             self.rail_item.translate(-0.5, 0, 0)
             self.view.addItem(self.rail_item)
 
-            # 3) Cart (Cuboid mesh)
-            cart_mesh = gl.MeshData.cube(x=0.16, y=0.10, z=0.08)
+            # 3) Cart (Cuboid mesh using custom vertices)
+            cart_mesh = create_cube_mesh(xlen=0.16, ylen=0.10, zlen=0.08)
             self.cart_item = gl.GLMeshItem(meshdata=cart_mesh, smooth=True, color=(0.2, 0.6, 0.9, 1.0), shader='shaded')
             self.view.addItem(self.cart_item)
 
@@ -122,7 +151,7 @@ class Sim3DWindow(QMainWindow):
 
         # Update Cart mesh position (centered at x = cx, y = 0, z = 0)
         self.cart_item.resetTransform()
-        self.cart_item.translate(cx - 0.08, -0.05, -0.04)
+        self.cart_item.translate(cx, 0, 0)
 
         # Pendulum Pole pivot sits at top of cart (cx, 0, 0.04)
         self.pole_item.resetTransform()
