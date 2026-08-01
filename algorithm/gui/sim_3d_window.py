@@ -109,6 +109,7 @@ class Sim3DWindow(QMainWindow):
 
         cart_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "cart", "cart_model.stl"))
         pendulum_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "pendulum", "pendulum_model.stl"))
+        track_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "track_model.stl"))
         assembly_fcstd = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "assembly_model.FCStd"))
 
         # Attempt to run automated FreeCAD conversion script if installed on system
@@ -120,6 +121,11 @@ class Sim3DWindow(QMainWindow):
 
         stl_loaded = False
         try:
+            if os.path.exists(track_stl):
+                track_meshdata, _ = load_stl_mesh(track_stl, align_mode="center")
+                self.track_cad_item = gl.GLMeshItem(meshdata=track_meshdata, smooth=True, color=(0.4, 0.45, 0.5, 1.0), shader='shaded')
+                self.view.addItem(self.track_cad_item)
+
             if os.path.exists(cart_stl) and os.path.exists(pendulum_stl):
                 cart_meshdata, cart_dim = load_stl_mesh(cart_stl, align_mode="center")
                 self.cart_item = gl.GLMeshItem(meshdata=cart_meshdata, smooth=True, color=(0.2, 0.6, 0.9, 1.0), shader='shaded')
