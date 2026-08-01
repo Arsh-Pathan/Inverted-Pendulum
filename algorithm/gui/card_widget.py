@@ -10,8 +10,7 @@ class CardWidget(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             CardWidget {
-                background-color: #ffffff;
-                border: 1px solid #000000;
+                border: 1px solid #777777;
                 border-radius: 8px;
             }
         """)
@@ -25,9 +24,8 @@ class CardWidget(QFrame):
                 font-family: 'Inter', 'Segoe UI', sans-serif;
                 font-size: 13px;
                 font-weight: 800;
-                color: #000000;
                 border: none;
-                border-bottom: 1px solid #000000;
+                border-bottom: 1px solid #777777;
                 padding-bottom: 4px;
                 margin-bottom: 4px;
             """)

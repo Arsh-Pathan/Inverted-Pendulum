@@ -3,7 +3,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.comms.protocol import (cmd_motor, cmd_forward, cmd_reverse, 
+from algorithm.comms.protocol import (cmd_motor, cmd_forward, cmd_reverse, 
                                    cmd_brake, cmd_coast, cmd_set_telemetry_rate, 
                                    cmd_query_angle, cmd_zero_tare)
 

@@ -3,7 +3,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.core.state import PendulumState
+from algorithm.math.core.state import PendulumState
 from rl.rl_controller import RLBalancer
 
 class TestRLBalancer(unittest.TestCase):

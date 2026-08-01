@@ -68,7 +68,7 @@ class ControlPanel(QWidget):
 
         # Row 1.5: HIL Controller Mode Selector Bar
         lbl_mode = QLabel("SELECT BALANCING ALGORITHM (HIL ENGINE):")
-        lbl_mode.setStyleSheet("font-size: 10px; font-weight: 800; color: #555555; margin-top: 4px;")
+        lbl_mode.setStyleSheet("font-size: 10px; font-weight: 800; margin-top: 4px;")
         ctrl_layout.addWidget(lbl_mode)
 
         mode_layout = QHBoxLayout()
@@ -95,14 +95,16 @@ class ControlPanel(QWidget):
 
         # Row 1.7: Display & Motor Transformation Toggles
         self.chk_invert_display = QCheckBox("Invert Displayed Angle (UI & Charts Only - Leaves Control Logic Untouched)")
-        self.chk_invert_display.setStyleSheet("font-size: 11px; font-weight: bold; color: #333333; margin-top: 2px;")
+        self.chk_invert_display.setStyleSheet("font-size: 11px; font-weight: bold; margin-top: 2px;")
         self.chk_invert_display.setChecked(False)
         self.chk_invert_display.toggled.connect(self.invert_display_toggled.emit)
         ctrl_layout.addWidget(self.chk_invert_display)
 
-        self.chk_invert_motor = QCheckBox("Reverse Motor Direction (Move cart in direction of pendulum fall to balance)")
+        self.chk_invert_motor = QCheckBox("Reverse Motor Direction (only if the motor leads are wired backwards)")
         self.chk_invert_motor.setStyleSheet("font-size: 11px; font-weight: bold; color: #d35400; margin-top: 2px; margin-bottom: 4px;")
-        self.chk_invert_motor.setChecked(True)
+        # Unchecked by default: the controllers already drive the cart toward the fall.
+        # Ticking it inverts control and the rig stabilises the pole hanging DOWN.
+        self.chk_invert_motor.setChecked(False)
         self.chk_invert_motor.toggled.connect(self.invert_motor_toggled.emit)
         ctrl_layout.addWidget(self.chk_invert_motor)
 
@@ -142,7 +144,6 @@ class ControlPanel(QWidget):
             QSpinBox, QDoubleSpinBox {
                 font-family: 'Consolas', monospace;
                 font-size: 13px; font-weight: bold;
-                color: #000000; background: #f5f5f5;
                 border: 1px solid #cccccc; border-radius: 4px;
                 padding: 4px 6px;
             }
@@ -265,7 +266,7 @@ class ControlPanel(QWidget):
             else:
                 btn.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: #f0f0f0; color: #333333; font-weight: 600; font-size: 12px;
+                        font-weight: 600; font-size: 12px;
                         border: 1px solid #cccccc; border-radius: 4px; padding: 7px;
                     }}
                     QPushButton:hover {{ background-color: {light}; color: white; }}

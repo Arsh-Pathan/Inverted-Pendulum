@@ -8,7 +8,7 @@ This document serves as the canonical system manifest, architectural specificati
 
 ### 1. Python-Hosted Hardware-in-the-Loop (HIL) Separation
 *   **ESP32 Firmware (`firmware/esp32_endpoint/`) is Stateless:** The embedded firmware MUST NOT contain any closed-loop control mathematics (no PID, LQR, or neural networks). It functions strictly as a low-latency I/O server streaming AS5600 12-bit magnetic encoder telemetry over USB CDC serial (115200 baud) and applying TB6612FNG H-bridge PWM commands (`[-255, +255]`).
-*   **Python Control Station (`python/`) is Closed-Loop Host:** All estimation, noise filtering (EMA), geometry math, and control laws run on the Python PC host inside a thread-safe asynchronous serial loop (`QThread`). Target round-trip control loop latency is $< 2.0\text{ ms}$.
+*   **Python Control Station (`algorithm/`) is Closed-Loop Host:** All estimation, noise filtering (EMA), geometry math, and control laws run on the Python PC host inside a thread-safe asynchronous serial loop (`QThread`). Target round-trip control loop latency is $< 2.0\text{ ms}$.
 
 ### 2. Geometry & Coordinate Conventions
 *   **Upright Equilibrium:** Vertical upright equilibrium is defined as $\theta = 180.0^\circ$ ($\pi$ rad).
@@ -16,7 +16,7 @@ This document serves as the canonical system manifest, architectural specificati
 *   **Lower Hemisphere Inversion:** When the pendulum drops below horizontal ($\theta \in [0^\circ, 90^\circ) \cup (270^\circ, 360^\circ]$), control sign MUST be inverted relative to upright stabilization to prevent positive feedback acceleration into the ground.
 
 ### 3. Actuator Deadband & Motor Safety
-*   **Stiction Deadband:** Static friction prevents movement below PWM duty $\approx 45$. All controllers MUST linearly map normalized output commands to $[45, 255]$ via `speed = min_power + int(abs_out * (max_power - min_power) / 255.0)`.
+*   **Stiction Deadband:** Static friction prevents movement below PWM duty $\approx 35$. Controllers apply a smooth dead-zone bias: tiny commands coast, medium commands ramp into the bias, and large commands saturate at `[-255, +255]`.
 *   **Hard Clamping:** Never emit motor commands outside integer range `[-255, +255]`.
 
 ---
@@ -29,11 +29,11 @@ Inverted-Pendulum/
 ├── docs/                            # Deep-dive architecture, wiring schematics, & research papers
 ├── firmware/esp32_endpoint/         # Modular C++ drivers (AS5600 I2C, TB6612 PWM, Serial Parser)
 ├── models/                          # FreeCAD assembly and 3MF/STL/G-code 3D print assets
-├── python/                          # Python HIL Control Station
+├── algorithm/                       # Python HIL Control Station
 │   ├── comms/                       # Thread-safe SerialClient & protocol formatters (M, F, R, B, C, T, Q, Z)
-│   ├── controllers/                 # Swappable engines: PIDBalancer, LQRBalancer, SwingUp, Hybrid, Oscillation
-│   ├── core/                        # Type-safe PendulumState dataclass & event definitions
-│   ├── envs/                        # InvertedPendulumEnv(gym.Env) supporting both HIL USB & non-linear Sim
+│   ├── math/controllers/            # Swappable engines: PIDBalancer, LQRBalancer, SwingUp, Hybrid, Oscillation
+│   ├── math/core/                   # Type-safe PendulumState dataclass & event definitions
+│   ├── math/envs/                   # InvertedPendulumEnv(gym.Env) supporting both HIL USB & non-linear Sim
 │   └── gui/                         # Premium CAD aesthetic PyQt6 / PyQtGraph dashboard & cards
 ├── rl/                              # Reinforcement Learning Suite
 │   ├── rl_controller.py             # RLBalancer: deploys trained .zip policies into HIL serial loop

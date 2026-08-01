@@ -4,8 +4,8 @@ import os
 import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.core.state import PendulumState
-from python.controllers import (PIDBalancer, LQRBalancer, SwingUpController, 
+from algorithm.math.core.state import PendulumState
+from algorithm.math.controllers import (PIDBalancer, LQRBalancer, SwingUpController, 
                                 HybridBalancer, OscillationController)
 
 class TestControllers(unittest.TestCase):

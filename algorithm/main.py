@@ -9,7 +9,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from PyQt6.QtWidgets import QApplication
-from python.gui.main_window import MainWindow
+from algorithm.gui.main_window import MainWindow
 
 def main():
     app = QApplication(sys.argv)

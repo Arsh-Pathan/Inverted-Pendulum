@@ -6,14 +6,13 @@ Runs multi-episode evaluations in simulation or hardware-in-the-loop and reports
 import sys
 import os
 import argparse
-import math
 import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.envs.inverted_pendulum_env import InvertedPendulumEnv
+from algorithm.math.envs.inverted_pendulum_env import InvertedPendulumEnv
 
 try:
-    from stable_baselines3 import PPO, SAC, TD3, A2C
+    from stable_baselines3 import PPO, SAC
     _SB3_AVAILABLE = True
 except ImportError:
     _SB3_AVAILABLE = False

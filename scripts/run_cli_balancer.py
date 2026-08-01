@@ -8,9 +8,9 @@ import time
 import serial
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.utils.config_loader import load_config
-from python.controllers.pid_balancer import PIDBalancer
-from python.comms.protocol import cmd_motor, cmd_brake, cmd_coast
+from algorithm.utils.config_loader import load_config
+from algorithm.math.controllers.pid_balancer import PIDBalancer
+from algorithm.comms.protocol import cmd_motor, cmd_brake, cmd_coast
 
 def run_cli_balancer():
     config = load_config()
@@ -19,14 +19,19 @@ def run_cli_balancer():
     ctrl_cfg = config.get("control", {})
 
     balancer = PIDBalancer(
-        kp=ctrl_cfg.get("kp", 15.0),
+        kp=ctrl_cfg.get("kp", 20.0),
         ki=ctrl_cfg.get("ki", 0.0),
         kd=ctrl_cfg.get("kd", 2.5),
-        alpha=ctrl_cfg.get("alpha", 0.08),
-        min_power=ctrl_cfg.get("min_motor_power", 45),
+        alpha=ctrl_cfg.get("alpha", 0.45),
+        min_power=ctrl_cfg.get("min_motor_power", 35),
         max_power=ctrl_cfg.get("max_motor_power", 255),
-        deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.4),
-        deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 6.0)
+        deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.0),
+        deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 0.0),
+        k_cart_v=ctrl_cfg.get("k_cart_v", 150.0),
+        k_cart_x=ctrl_cfg.get("k_cart_x", 200.0),
+        cart_accel_max=ctrl_cfg.get("cart_accel_max", 6.0),
+        cart_damping=ctrl_cfg.get("cart_damping", 7.5),
+        dither_power=ctrl_cfg.get("dither_power", 0)
     )
     balancer.enable()
 

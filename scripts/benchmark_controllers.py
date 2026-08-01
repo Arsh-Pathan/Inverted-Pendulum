@@ -5,42 +5,48 @@ Simulates non-linear inverted pendulum physics and reports settling time, peak e
 """
 import sys
 import os
-import time
 import math
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.envs.inverted_pendulum_env import InvertedPendulumEnv
-from python.controllers import PIDBalancer, LQRBalancer, HybridBalancer
-from python.core.state import PendulumState
+from algorithm.math.envs.inverted_pendulum_env import InvertedPendulumEnv
+from algorithm.math.controllers import PIDBalancer, LQRBalancer, HybridBalancer
+from algorithm.math.core.state import PendulumState
 
 def run_benchmark(controller, name: str, init_error_deg: float = 15.0, steps: int = 500):
     env = InvertedPendulumEnv(simulated=True)
-    # Reset with custom perturbation
     env.reset()
-    env.state = np_array([math.radians(init_error_deg), 0.0])
-    
+
+    # Seed the perturbation. `_sim` is the authoritative [x, v, theta, omega] vector;
+    # writing only `state` (as this used to) left the physics integrator at theta=0.
+    theta0 = math.radians(init_error_deg)
+    env._sim = np_array([0.0, 0.0, theta0, 0.0])
+    env.state = np_array([theta0, 0.0])
+
     controller.enable()
     total_energy = 0.0
     peak_error = abs(init_error_deg)
     settling_step = -1
-    
+
     for step in range(1, steps + 1):
-        err_deg = math.degrees(env.state[0])
+        theta_deg = math.degrees(env.state[0])
         vel_deg_s = math.degrees(env.state[1])
-        
-        # Convert to PendulumState (180 deg is upright in our controllers)
-        state = PendulumState(angle_dev=180.0 - err_deg, velocity=-vel_deg_s)
+
+        # Controllers consume `angle_dev` (0 = hanging, 180 = upright), so map
+        # theta -> angle_dev = theta + 180. Velocity keeps its sign, since
+        # d(angle_dev)/dt == d(theta)/dt under the canonical convention.
+        state = PendulumState(angle_dev=theta_deg + 180.0, velocity=vel_deg_s)
         pwm_cmd = controller.compute_action_from_state(state, env.dt)
-        
+
         # Step simulation (normalized action -1..1)
         norm_act = pwm_cmd / 255.0
         env.step([norm_act])
-        
+
         abs_err = abs(math.degrees(env.state[0]))
         peak_error = max(peak_error, abs_err)
         total_energy += abs(norm_act)
-        
-        if abs_err < 1.0 and abs(vel_deg_s) < 5.0 and settling_step == -1:
+
+        # Settling must be judged on the CURRENT velocity, not the pre-step value.
+        if abs_err < 1.0 and abs(math.degrees(env.state[1])) < 5.0 and settling_step == -1:
             settling_step = step
 
     settling_time_s = (settling_step * env.dt) if settling_step != -1 else float('inf')
@@ -53,7 +59,7 @@ def run_benchmark(controller, name: str, init_error_deg: float = 15.0, steps: in
 
 def np_array(val):
     import numpy as np
-    return np.array(val, dtype=np.float32)
+    return np.array(val, dtype=np.float64)
 
 def main():
     print("─── Inverted Pendulum Offline Physics Benchmark ───")

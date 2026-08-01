@@ -9,9 +9,9 @@ import argparse
 import serial
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.utils.config_loader import load_config
-from python.utils.data_logger import TelemetryLogger
-from python.core.state import PendulumState
+from algorithm.utils.config_loader import load_config
+from algorithm.utils.data_logger import TelemetryLogger
+from algorithm.math.core.state import PendulumState
 
 def record_telemetry(duration_sec: float = 10.0, output_file: str = None):
     config = load_config()

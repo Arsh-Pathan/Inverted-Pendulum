@@ -1,8 +1,8 @@
 import os
 import csv
 import time
-from typing import List, Optional
-from ..core.state import PendulumState
+from typing import Optional
+from ..math.core.state import PendulumState
 
 class TelemetryLogger:
     """

@@ -3,7 +3,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.core.state import PendulumState
+from algorithm.math.core.state import PendulumState
 
 class TestPendulumState(unittest.TestCase):
     """Test suite for PendulumState dataclass properties and angle wrapping."""
@@ -28,6 +28,18 @@ class TestPendulumState(unittest.TestCase):
         # 350.0° (-10° hanging) -> error from 180° is -170.0°
         s5 = PendulumState(angle_dev=350.0)
         self.assertAlmostEqual(s5.error_from_upright, -170.0)
+
+    def test_theta_from_upright_is_negation_of_error(self):
+        """theta is the canonical control coordinate: theta == -error_from_upright."""
+        for ad in (0.0, 90.0, 170.0, 175.0, 180.0, 185.0, 190.0, 350.0):
+            s = PendulumState(angle_dev=ad)
+            self.assertAlmostEqual(s.theta_from_upright, -s.error_from_upright, places=6)
+            self.assertTrue(-180.0 <= s.theta_from_upright <= 180.0)
+
+        # Upright is zero; leaning to larger angle_dev is POSITIVE theta.
+        self.assertAlmostEqual(PendulumState(angle_dev=180.0).theta_from_upright, 0.0)
+        self.assertAlmostEqual(PendulumState(angle_dev=185.0).theta_from_upright, 5.0)
+        self.assertAlmostEqual(PendulumState(angle_dev=175.0).theta_from_upright, -5.0)
 
     def test_hemisphere_and_basin_checks(self):
         # Upright (180°) is above horizontal and in capture basin

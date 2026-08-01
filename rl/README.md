@@ -41,6 +41,11 @@ Or train Soft Actor-Critic (SAC):
 ```bash
 python rl/train_sac.py --timesteps 50000 --save-path rl/models/sac_pendulum.zip
 ```
+Both scripts also write per-step transition data to CSV under `rl/training_data/`.
+Override the destination with `--data-path`, for example:
+```bash
+python rl/train_ppo.py --timesteps 50000 --data-path rl/training_data/ppo_run_001.csv
+```
 
 ### 3. Train Directly on Physical Hardware (HIL Mode)
 Plug in the ESP32 via USB and train live on the physical cart-pole:

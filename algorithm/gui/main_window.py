@@ -1,10 +1,8 @@
-import sys
-import os
 import time
 import math
 import numpy as np
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                             QSplitter, QLabel, QGridLayout, QFrame, QTabWidget)
+                             QSplitter, QLabel, QGridLayout, QFrame, QTabWidget, QPushButton)
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QFont
 import pyqtgraph as pg
@@ -12,10 +10,10 @@ import pyqtgraph as pg
 from ..utils.config_loader import load_config, save_config
 from ..comms.serial_client import SerialClient
 from ..comms.protocol import cmd_motor, cmd_brake, cmd_coast, cmd_zero_tare
-from ..controllers.pid_balancer import PIDBalancer
-from ..controllers.lqr_balancer import LQRBalancer
-from ..controllers.hybrid_balancer import HybridBalancer
-from ..controllers.oscillation import OscillationController
+from ..math.controllers.pid_balancer import PIDBalancer
+from ..math.controllers.lqr_balancer import LQRBalancer
+from ..math.controllers.hybrid_balancer import HybridBalancer
+from ..math.controllers.oscillation import OscillationController
 try:
     from rl.rl_controller import RLBalancer
 except ImportError:
@@ -24,6 +22,22 @@ except ImportError:
 from .card_widget import CardWidget
 from .telemetry_canvas import TelemetryCanvas
 from .control_panel import ControlPanel
+
+
+QSS_STYLE_DARK = """
+QMainWindow { background-color: #1e1e1e; }
+QWidget { background-color: #1e1e1e; color: #ffffff; font-family: 'Inter', 'Segoe UI', sans-serif; }
+QLabel { color: #ffffff; }
+QTabWidget::pane { border: 1px solid #444444; border-radius: 4px; background: #1e1e1e; }
+QTabBar::tab {
+    background: #2d2d2d; border: 1px solid #444444; padding: 8px 16px;
+    font-weight: bold; font-size: 13px; color: #bbbbbb; border-top-left-radius: 4px; border-top-right-radius: 4px;
+}
+QTabBar::tab:selected { background: #1e1e1e; color: #ffffff; border-bottom: 2px solid #3498db; }
+QTabBar::tab:hover { background: #3d3d3d; }
+QPushButton { background: #333333; color: #ffffff; border: 1px solid #555555; padding: 4px 10px; border-radius: 4px; }
+QPushButton:checked { background: #555555; }
+"""
 
 QSS_STYLE = """
 QMainWindow { background-color: #ffffff; }
@@ -58,29 +72,45 @@ class MainWindow(QMainWindow):
 
         # 2) Initialize Modular Balancing Algorithms
         self.pid_balancer = PIDBalancer(
-            kp=ctrl_cfg.get("kp", 15.0),
+            kp=ctrl_cfg.get("kp", 20.0),
             ki=ctrl_cfg.get("ki", 0.0),
             kd=ctrl_cfg.get("kd", 2.5),
-            alpha=ctrl_cfg.get("alpha", 0.08),
-            min_power=ctrl_cfg.get("min_motor_power", 45),
+            alpha=ctrl_cfg.get("alpha", 0.45),
+            min_power=ctrl_cfg.get("min_motor_power", 35),
             max_power=ctrl_cfg.get("max_motor_power", 255),
-            deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.4),
-            deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 6.0)
+            deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.0),
+            deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 0.0),
+            k_cart_v=ctrl_cfg.get("k_cart_v", 150.0),
+            k_cart_x=ctrl_cfg.get("k_cart_x", 200.0),
+            cart_accel_max=ctrl_cfg.get("cart_accel_max", 6.0),
+            cart_damping=ctrl_cfg.get("cart_damping", 7.5),
+            dither_power=ctrl_cfg.get("dither_power", 0)
         )
         self.lqr_balancer = LQRBalancer(
             k_theta=ctrl_cfg.get("k_theta", 25.0),
             k_omega=ctrl_cfg.get("k_omega", 3.5),
-            alpha=ctrl_cfg.get("alpha", 0.08),
-            min_power=ctrl_cfg.get("min_motor_power", 45),
+            alpha=ctrl_cfg.get("alpha", 0.45),
+            min_power=ctrl_cfg.get("min_motor_power", 35),
             max_power=ctrl_cfg.get("max_motor_power", 255),
-            deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.4),
-            deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 6.0)
+            deadzone_deg=ctrl_cfg.get("equilibrium_deadzone_deg", 0.0),
+            deadzone_vel=ctrl_cfg.get("equilibrium_deadzone_vel", 0.0),
+            k_cart_v=ctrl_cfg.get("k_cart_v", 150.0),
+            k_cart_x=ctrl_cfg.get("k_cart_x", 200.0),
+            cart_accel_max=ctrl_cfg.get("cart_accel_max", 6.0),
+            cart_damping=ctrl_cfg.get("cart_damping", 7.5),
+            dither_power=ctrl_cfg.get("dither_power", 0),
+            input_gain_n_per_pwm=ctrl_cfg.get("input_gain_n_per_pwm", 0.008),
+            control_loop_rate_hz=ctrl_cfg.get("control_loop_rate_hz", 200.0)
         )
         self.hybrid_balancer = HybridBalancer(
             stabilizer=self.pid_balancer
         )
         if RLBalancer is not None:
-            self.rl_balancer = RLBalancer(model_path=None, min_power=45, max_power=255)
+            self.rl_balancer = RLBalancer(
+                model_path=None,
+                min_power=ctrl_cfg.get("min_motor_power", 35),
+                max_power=ctrl_cfg.get("max_motor_power", 255)
+            )
         else:
             self.rl_balancer = None
 
@@ -92,7 +122,15 @@ class MainWindow(QMainWindow):
         self.active_mode = "PID" # "PID", "LQR", "RL", "HYBRID"
         self.current_action = 0
         self.invert_display = False
-        self.invert_motor = True
+        # MUST stay False. The controllers already emit a catch-the-fall command in the
+        # canonical +theta convention (see core/state.py), so this must NOT negate it.
+        #
+        # Verified on hardware: with this True the cart drove opposite to the control law
+        # and the rig stabilised the pole HANGING DOWN - the signature of an inverted
+        # sign, since negating a catch-the-fall law yields one that damps toward hanging.
+        #
+        # This flag is only for a physically reversed motor (swapped TB6612 A01/A02).
+        self.invert_motor = False
 
         # 3) Telemetry State Variables
         self.theta = 0.0
@@ -176,9 +214,9 @@ class MainWindow(QMainWindow):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(4)
         lbl_title = QLabel("Inverted Pendulum HIL Research Station")
-        lbl_title.setStyleSheet("font-size: 30px; font-weight: 800; color: #000000; letter-spacing: -0.5px;")
+        lbl_title.setStyleSheet("font-size: 30px; font-weight: 800; letter-spacing: -0.5px;")
         lbl_sub = QLabel("Real-time AI Control (RL/PPO, LQR, Hybrid Swing-Up, PID) & Dynamic Phase Portraits")
-        lbl_sub.setStyleSheet("font-size: 13px; font-weight: 600; color: #555555;")
+        lbl_sub.setStyleSheet("font-size: 13px; font-weight: 600;")
         header_layout.addWidget(lbl_title)
         header_layout.addWidget(lbl_sub)
         left_layout.addWidget(header_widget)
@@ -191,15 +229,20 @@ class MainWindow(QMainWindow):
         # Status row
         status_row = QHBoxLayout()
         self.lbl_telemetry = QLabel("Time: 0.0s | Port: Searching...")
-        self.lbl_telemetry.setStyleSheet("color: #555555; font-weight: 600; font-size: 13px;")
+        self.lbl_telemetry.setStyleSheet("font-weight: 600; font-size: 13px;")
         status_row.addWidget(self.lbl_telemetry)
         status_row.addStretch()
+
+        self.btn_dark_mode = QPushButton("Dark Mode")
+        self.btn_dark_mode.setCheckable(True)
+        self.btn_dark_mode.clicked.connect(self.toggle_dark_mode)
+        status_row.addWidget(self.btn_dark_mode)
 
         self.status_dot = QFrame()
         self.status_dot.setFixedSize(10, 10)
         self.status_dot.setStyleSheet("border: 1px solid #000000; border-radius: 5px; background-color: #888888;")
         self.status_text = QLabel("Offline")
-        self.status_text.setStyleSheet("font-weight: 600; font-size: 13px; color: #000000;")
+        self.status_text.setStyleSheet("font-weight: 600; font-size: 13px;")
         status_row.addWidget(self.status_dot)
         status_row.addWidget(self.status_text)
         sim_card.layout.addLayout(status_row)
@@ -225,9 +268,9 @@ class MainWindow(QMainWindow):
         readout_grid.setColumnStretch(1, 1)
         readout_grid.setColumnStretch(2, 1)
         readout_grid.setColumnStretch(3, 1)
-        big_style = "font-size: 30px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
-        small_style = "font-size: 15px; font-family: 'Consolas', monospace; font-weight: bold; color: #000000;"
-        lbl_style = "font-size: 10px; font-weight: 800; color: #555555;"
+        big_style = "font-size: 30px; font-family: 'Consolas', monospace; font-weight: bold;"
+        small_style = "font-size: 15px; font-family: 'Consolas', monospace; font-weight: bold;"
+        lbl_style = "font-size: 10px; font-weight: 800;"
 
         def add_stat(row, col, title, init):
             """Create a stacked (caption + value) readout cell and return the value label."""
@@ -421,6 +464,36 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([600, 1050])
+
+
+    def toggle_dark_mode(self, checked):
+        if checked:
+            self.setStyleSheet(QSS_STYLE_DARK)
+            self.btn_dark_mode.setText("Light Mode")
+            # Update plot backgrounds
+            self.canvas_widget.is_dark_mode = True
+            self.canvas_widget.update()
+            self.angle_plot.setBackground("#1e1e1e")
+            self.vel_plot.setBackground("#1e1e1e")
+            self.action_plot.setBackground("#1e1e1e")
+            self.phase_plot.setBackground("#1e1e1e")
+            self.reward_plot.setBackground("#1e1e1e")
+            self.cumreward_plot.setBackground("#1e1e1e")
+            self.hist_err_plot.setBackground("#1e1e1e")
+            self.hist_pwm_plot.setBackground("#1e1e1e")
+        else:
+            self.setStyleSheet(QSS_STYLE)
+            self.btn_dark_mode.setText("Dark Mode")
+            self.canvas_widget.is_dark_mode = False
+            self.canvas_widget.update()
+            self.angle_plot.setBackground("#ffffff")
+            self.vel_plot.setBackground("#ffffff")
+            self.action_plot.setBackground("#ffffff")
+            self.phase_plot.setBackground("#ffffff")
+            self.reward_plot.setBackground("#ffffff")
+            self.cumreward_plot.setBackground("#ffffff")
+            self.hist_err_plot.setBackground("#ffffff")
+            self.hist_pwm_plot.setBackground("#ffffff")
 
     def _style_chart(self, plot, y_label="Val", y_unit="", line_color="#000000"):
         plot.setBackground("#ffffff")
@@ -675,7 +748,12 @@ class MainWindow(QMainWindow):
             if not hasattr(self, 'smooth_vel'):
                 self.smooth_vel = raw_vel
             else:
-                self.smooth_vel = (0.2 * raw_vel) + (0.8 * self.smooth_vel)
+                # alpha=0.55: the controllers apply their own EMA on top of this one, and
+                # a 0.2 factor here added ~40 ms of lag which cascaded with the
+                # controller's filter to ~155 ms - roughly one pendulum instability time
+                # constant (148 ms). The damping term then arrived a full time constant
+                # late, which is precisely what produces overshoot at the target.
+                self.smooth_vel = (0.55 * raw_vel) + (0.45 * self.smooth_vel)
             # Snap near-zero velocity to exactly zero to stop idle drift on the readout/plots.
             if abs(self.smooth_vel) < 3.0:
                 self.smooth_vel = 0.0
@@ -741,7 +819,10 @@ class MainWindow(QMainWindow):
         is_spinning = abs(self.vel_deg_s) > 360.0
         spin_penalty = (50.0 + 0.15 * (abs(self.vel_deg_s) - 360.0)) if is_spinning else 0.0
         norm_action = float(self.current_action) / 255.0
-        inst_reward = holding_bonus - spin_penalty - (err_rad**2 + 0.2 * vel_rad**2 + 0.001 * (norm_action * 255.0)**2)
+        # Cost the NORMALISED action, matching the RL env. Using (norm_action*255)**2 here
+        # re-expanded the command back to raw PWM, inflating the effort term by 255^2
+        # (~65,000x) and swamping every other reward component.
+        inst_reward = holding_bonus - spin_penalty - (err_rad**2 + 0.2 * vel_rad**2 + 0.001 * norm_action**2)
 
         self._sum_sq_err += err_upright_deg**2
         self._sum_abs_err += abs(err_upright_deg) * dt
@@ -840,12 +921,21 @@ class MainWindow(QMainWindow):
 
         # Tab 4: Performance Analytics — histograms + cumulative IAE
         if len(a_disp) > 1:
-            err_counts, err_edges = np.histogram(a_disp, bins=25)
+            a_min, a_max = a_disp.min(), a_disp.max()
+            if np.isclose(a_min, a_max):
+                a_min -= 0.1
+                a_max += 0.1
+            err_counts, err_edges = np.histogram(a_disp, bins=25, range=(a_min, a_max))
             err_centers = (err_edges[:-1] + err_edges[1:]) / 2.0
-            err_width = (err_edges[1] - err_edges[0]) * 0.9
+            err_width = max(1e-5, (err_edges[1] - err_edges[0]) * 0.9)
             self.hist_err_bars.setOpts(x=err_centers, height=err_counts, width=err_width)
 
-            pwm_counts, pwm_edges = np.histogram(np.asarray(u), bins=25)
+            u_arr = np.asarray(u)
+            u_min, u_max = u_arr.min(), u_arr.max()
+            if np.isclose(u_min, u_max):
+                u_min -= 1.0
+                u_max += 1.0
+            pwm_counts, pwm_edges = np.histogram(u_arr, bins=25, range=(u_min, u_max))
             pwm_centers = (pwm_edges[:-1] + pwm_edges[1:]) / 2.0
             pwm_width = max(1e-3, (pwm_edges[1] - pwm_edges[0]) * 0.9)
             self.hist_pwm_bars.setOpts(x=pwm_centers, height=pwm_counts, width=pwm_width)

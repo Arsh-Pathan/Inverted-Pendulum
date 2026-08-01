@@ -1,5 +1,4 @@
-from dataclasses import dataclass, field
-import time
+from dataclasses import dataclass
 
 @dataclass
 class PendulumState:
@@ -15,17 +14,36 @@ class PendulumState:
     sample_rate_hz: float = 0.0     # Observed telemetry stream frequency
 
     @property
+    def theta_from_upright(self) -> float:
+        """
+        CANONICAL control coordinate: signed tilt in degrees away from upright (180.0°).
+
+        theta = angle_dev - 180, wrapped to [-180, +180]:
+            0    -> balanced upright
+            +-180 -> hanging straight down
+        Positive theta means the pole is leaning the same way that a positive
+        reported `velocity` moves it, so `theta` and `velocity` form a consistent
+        (position, derivative) pair: d(theta)/dt == velocity.
+
+        Control laws MUST use this rather than `error_from_upright`, whose sign is
+        opposite to `velocity` and therefore turns any velocity/derivative gain into
+        destabilising positive feedback.
+        """
+        theta = (self.angle_dev - 180.0) % 360.0
+        if theta > 180.0:
+            theta -= 360.0
+        return theta
+
+    @property
     def error_from_upright(self) -> float:
         """
-        Returns the angular error in degrees relative to the vertical upright position (180.0°).
-        Wrapped smoothly into the shortest path [-180.0, +180.0].
+        Angular error to drive to zero, defined as (180 - angle_dev), i.e. -theta.
+
+        DEPRECATED for control use: this is the negative of `theta_from_upright`, so
+        pairing it with the raw `velocity` field mixes two opposite sign conventions.
+        Retained only for display/logging continuity.
         """
-        err = 180.0 - self.angle_dev
-        while err > 180.0:
-            err -= 360.0
-        while err < -180.0:
-            err += 360.0
-        return err
+        return -self.theta_from_upright
 
     @property
     def is_above_horizontal(self) -> bool:

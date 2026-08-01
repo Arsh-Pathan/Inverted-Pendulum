@@ -5,8 +5,8 @@ import shutil
 import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.core.state import PendulumState
-from python.utils.data_logger import TelemetryLogger
+from algorithm.math.core.state import PendulumState
+from algorithm.utils.data_logger import TelemetryLogger
 
 class TestTelemetryLogger(unittest.TestCase):
     """Test suite for high-speed CSV telemetry recording and file cleanup."""

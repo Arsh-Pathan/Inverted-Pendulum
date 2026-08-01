@@ -4,7 +4,7 @@ import json
 def get_project_root():
     """Returns the absolute path to the project root directory."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    # python/utils -> python -> project root
+    # algorithm/utils -> algorithm -> project root
     return os.path.abspath(os.path.join(current_dir, "..", ".."))
 
 def get_config_path():
@@ -27,15 +27,23 @@ def load_config():
             "angle_invert": False
         },
         "control": {
-            "kp": 15.0,
+            "kp": 20.0,
             "ki": 0.0,
             "kd": 2.5,
-            "alpha": 0.08,
-            "control_loop_rate_hz": 100,
-            "min_motor_power": 45,
+            "alpha": 0.45,
+            "k_theta": 25.0,
+            "k_omega": 3.5,
+            "k_cart_v": 150.0,
+            "k_cart_x": 200.0,
+            "cart_accel_max": 6.0,
+            "cart_damping": 7.5,
+            "input_gain_n_per_pwm": 0.008,
+            "control_loop_rate_hz": 200,
+            "min_motor_power": 35,
             "max_motor_power": 255,
-            "equilibrium_deadzone_deg": 0.4,
-            "equilibrium_deadzone_vel": 6.0
+            "equilibrium_deadzone_deg": 0.0,
+            "equilibrium_deadzone_vel": 0.0,
+            "dither_power": 0
         },
         "oscillation": {
             "speed": 255,

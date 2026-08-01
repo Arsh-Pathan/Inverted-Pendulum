@@ -8,7 +8,7 @@ import time
 import serial
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.utils.config_loader import load_config, save_config
+from algorithm.utils.config_loader import load_config
 
 def calibrate_sensor():
     config = load_config()

@@ -1,3 +1,4 @@
+import time
 import serial
 import serial.tools.list_ports
 from queue import Queue, Empty
@@ -20,6 +21,14 @@ class SerialClient(QThread):
         self.running = False
         self.cmd_queue = Queue()
         self.ser = None
+
+        # Latest telemetry, polled by the HIL RL environment (which has no Qt event loop
+        # and so cannot receive the `angle_received` signal). `last_angle` is the
+        # calibrated deviation in degrees (0 = hanging, 180 = upright); `last_velocity`
+        # is its time derivative in deg/s, sign-consistent with `last_angle`.
+        self.last_angle = 180.0
+        self.last_velocity = 0.0
+        self._last_angle_t = None
 
     def run(self):
         self.running = True
@@ -70,6 +79,19 @@ class SerialClient(QThread):
                         continue
 
                     angle_val = float(line)
+
+                    # Maintain wrap-aware angle/velocity snapshots for pollers.
+                    now = time.monotonic()
+                    if self._last_angle_t is not None:
+                        span = now - self._last_angle_t
+                        if span > 1e-6:
+                            delta = (angle_val - self.last_angle) % 360.0
+                            if delta > 180.0:
+                                delta -= 360.0
+                            self.last_velocity = delta / span
+                    self.last_angle = angle_val
+                    self._last_angle_t = now
+
                     self.angle_received.emit(angle_val)
                 except ValueError:
                     # Line was not a pure float number

@@ -20,6 +20,7 @@ class HybridBalancer(BaseController):
         self.swing_up = swing_up or SwingUpController()
         self.capture_angle_deg = capture_angle_deg
         self.active_mode = "SWING_UP" # "SWING_UP" or "STABILIZE"
+        self._prev_angle = None
 
     def enable(self):
         super().enable()
@@ -36,6 +37,7 @@ class HybridBalancer(BaseController):
         self.stabilizer.reset()
         self.swing_up.reset()
         self.active_mode = "SWING_UP"
+        self._prev_angle = None
 
     def update_params(self, params: Dict[str, Any]):
         self.stabilizer.update_params(params)
@@ -47,8 +49,8 @@ class HybridBalancer(BaseController):
         if not self.enabled:
             return 0
 
-        error = abs(state.error_from_upright)
-        
+        error = abs(state.theta_from_upright)
+
         # Hysteresis switching logic to avoid rapid fluttering at basin boundary
         if self.active_mode == "SWING_UP":
             if error <= self.capture_angle_deg and abs(state.velocity) < 150.0:
@@ -65,7 +67,16 @@ class HybridBalancer(BaseController):
             return self.swing_up.compute_action_from_state(state, dt)
 
     def compute_action(self, angle_deg: float, dt: float) -> int:
-        err = abs(180.0 - angle_deg)
-        while err > 180.0: err -= 360.0
-        state_stub = PendulumState(angle_dev=angle_deg, velocity=0.0)
+        # Estimate angular velocity here: both the energy swing-up law and the capture
+        # test depend on it, and passing a hardcoded 0.0 (as this used to) made swing-up
+        # unable to sense which way the pole was moving.
+        raw_vel = 0.0
+        if self._prev_angle is not None and dt > 0:
+            delta = (angle_deg - self._prev_angle) % 360.0
+            if delta > 180.0: delta -= 360.0
+            elif delta < -180.0: delta += 360.0
+            raw_vel = delta / dt
+        self._prev_angle = angle_deg
+
+        state_stub = PendulumState(angle_dev=angle_deg, velocity=raw_vel)
         return self.compute_action_from_state(state_stub, dt)

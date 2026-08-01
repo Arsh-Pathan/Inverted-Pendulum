@@ -8,8 +8,11 @@ import time
 import serial
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from python.utils.config_loader import load_config
+from algorithm.utils.config_loader import load_config
 
+import pytest
+
+@pytest.mark.hardware
 def test_endpoints():
     config = load_config()
     port = config.get("serial", {}).get("preferred_port", "COM3")

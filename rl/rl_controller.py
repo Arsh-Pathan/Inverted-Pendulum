@@ -9,8 +9,8 @@ try:
 except ImportError:
     _SB3_AVAILABLE = False
 
-from python.controllers.base_controller import BaseController
-from python.core.state import PendulumState
+from algorithm.math.controllers.base_controller import BaseController
+from algorithm.math.core.state import PendulumState
 
 class RLBalancer(BaseController):
     """
@@ -80,30 +80,36 @@ class RLBalancer(BaseController):
         if not self.enabled:
             return 0
 
+        # Canonical signed tilt, matching the `theta` the policy was trained on.
+        theta = state.theta_from_upright
+
         # Equilibrium deadzone coasting to prevent buzzing
-        if abs(state.error_from_upright) < 0.4 and abs(state.velocity) < 6.0:
+        if abs(theta) < 0.4 and abs(state.velocity) < 6.0:
             return 0
 
         if not self.is_loaded or self.model is None:
-            # Robust state-feedback baseline when model is not loaded
-            output = (state.error_from_upright * 4.5) + (state.velocity * 0.3)
+            # Robust state-feedback baseline when model is not loaded. Positive gains on
+            # positive tilt: the cart drives toward the fall to catch it.
+            output = (theta * 4.5) + (state.velocity * 0.3)
         else:
-            err_rad = math.radians(state.error_from_upright)
-            vel_rad = math.radians(state.velocity)
-            obs = np.array([err_rad, vel_rad], dtype=np.float32)
+            # The observation MUST match the training env exactly: [theta_rad, omega_rad].
+            # This previously fed `error_from_upright` (= -theta), i.e. the negation of the
+            # trained observation, so the policy saw a mirrored world and pushed the wrong way.
+            obs = np.array([math.radians(theta), math.radians(state.velocity)], dtype=np.float32)
             action, _ = self.model.predict(obs, deterministic=True)
-            norm_action = float(action[0] if isinstance(action, (np.ndarray, list)) else action)
+            norm_action = float(np.asarray(action).reshape(-1)[0])
             output = norm_action * 255.0
 
         abs_output = abs(output)
         if abs_output <= 0.05:
             return 0
 
-        speed = self.min_power + int((abs_output / 255.0) * (self.max_power - self.min_power))
+        span = max(1.0, float(self.max_power - self.min_power))
+        speed = self.min_power + int(min(1.0, abs_output / 255.0) * span)
         speed = max(self.min_power, min(self.max_power, speed))
 
-        # Align sign polarity with LQRBalancer / PIDBalancer (-speed when output > 0)
-        return -speed if output > 0 else speed
+        # Positive command drives the cart toward the fall (matches PID/LQR convention).
+        return speed if output > 0 else -speed
 
     def compute_action(self, angle_deg: float, dt: float) -> int:
         err = 180.0 - angle_deg

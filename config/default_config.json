@@ -11,15 +11,23 @@
         "angle_invert": true
     },
     "control": {
-        "kp": 15.0,
-        "ki": 0.05,
+        "kp": 20.0,
+        "ki": 3.0,
         "kd": 2.5,
-        "alpha": 0.08,
+        "alpha": 0.45,
+        "k_theta": 25.0,
+        "k_omega": 3.5,
+        "k_cart_v": 150.0,
+        "k_cart_x": 200.0,
+        "cart_accel_max": 6.0,
+        "cart_damping": 7.5,
+        "input_gain_n_per_pwm": 0.008,
         "control_loop_rate_hz": 100,
-        "min_motor_power": 45,
+        "min_motor_power": 35,
         "max_motor_power": 255,
-        "equilibrium_deadzone_deg": 0.4,
-        "equilibrium_deadzone_vel": 6.0
+        "equilibrium_deadzone_deg": 0.0,
+        "equilibrium_deadzone_vel": 0.0,
+        "dither_power": 0
     },
     "oscillation": {
         "speed": 255,

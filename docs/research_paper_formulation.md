@@ -104,13 +104,25 @@ $$\dot{V} = \tilde{E} \dot{E} = \tilde{E} \left( J_0 \dot{\theta} \ddot{\theta} 
 Substituting the rotational equation of motion $J_0 \ddot{\theta} - m g l \sin\theta = -m l u \cos\theta$ (neglecting rotational damping $b_\theta \approx 0$ for energy pumping):
 $$\dot{V} = \tilde{E} \dot{\theta} \left( -m l u \cos\theta \right) = -m l u \tilde{E} \dot{\theta} \cos\theta$$
 
-To guarantee global asymptotic convergence ($\dot{V} \le 0$), we select the feedback control law:
-$$u = k_E \tilde{E} \dot{\theta} \cos\theta$$
-or in terms of bounded bang-bang control:
-$$u = -u_{\max} \cdot \text{sign}\left( \tilde{E} \dot{\theta} \cos\theta \right)$$
-Under this law:
-$$\dot{V} = -m l k_E \tilde{E}^2 \dot{\theta}^2 \cos^2\theta \le 0$$
-Since $\dot{V} \le 0$ globally for all $\theta \notin \{ \frac{\pi}{2}, \frac{3\pi}{2} \}$, LaSalle's Invariance Principle guarantees that the system asymptotically converges to the energy manifold $E = E_0$. Once the state enters the upright capture basin $\mathcal{B}_{\text{capture}} = \{ (\theta, \dot{\theta}) : |\theta - \pi| \le \theta_{\text{capture}}, |\dot{\theta}| \le \omega_{\max} \}$, our supervisory `HybridBalancer` transitions control authority from Lyapunov energy pumping to precision LQR/PID stabilization.
+To guarantee $\dot{V} \le 0$ we select the feedback control law
+$$u = -k_E \tilde{E} \dot{\theta} \cos\theta, \qquad k_E > 0$$
+or, as bounded bang-bang control,
+$$u = -u_{\max}\,\text{sign}\left( \tilde{E} \dot{\theta} \cos\theta \right)$$
+Substituting the former into $\dot{V} = -m l u \tilde{E}\dot{\theta}\cos\theta$ gives
+$$\dot{V} = -m l k_E \left(\tilde{E} \dot{\theta} \cos\theta\right)^2 \le 0$$
+
+Note the leading minus sign in $u$: with $u = +k_E\tilde{E}\dot\theta\cos\theta$ the same
+substitution yields $\dot{V} = +mlk_E(\cdot)^2 \ge 0$, i.e. the energy error *grows*. The sign is
+what distinguishes convergence from divergence, and the $\tilde{E}$ factor is what makes the law
+stop pumping at the target; a pure $\text{sign}(\dot\theta\cos\theta)$ law omits it and spins the
+pendulum indefinitely.
+
+Because $\dot{V} \le 0$ with equality only on the set where $\tilde{E} = 0$, $\dot{\theta} = 0$, or
+$\cos\theta = 0$, LaSalle's Invariance Principle gives convergence to the largest invariant subset
+of that set. This is convergence to the energy manifold $E = E_0$ — **not** convergence to the
+upright point itself: the homoclinic orbit $E = E_0$ includes states passing through vertical with
+nonzero speed, and the hanging equilibrium $\dot\theta = 0$ is itself invariant. Hence the need for
+a separate capture-and-stabilise stage. Once the state enters the upright capture basin $\mathcal{B}_{\text{capture}} = \{ (\theta, \dot{\theta}) : |\theta - \pi| \le \theta_{\text{capture}}, |\dot{\theta}| \le \omega_{\max} \}$, our supervisory `HybridBalancer` transitions control authority from Lyapunov energy pumping to precision LQR/PID stabilization.
 
 ---
 
@@ -127,8 +139,23 @@ To overcome the challenges of non-linear stiction, track imperfections, and sens
     $$r(s_t, a_t) = R_{\text{hold}}(e_\theta, k) - R_{\text{spin}}(\dot{\theta}) - \left( w_\theta e_\theta^2 + w_\omega \dot{\theta}^2 + w_u a_t^2 \right)$$
     where $k \ge 1$ is the number of consecutive time steps spent continuously balanced within the upright buffer, and:
     $$R_{\text{hold}}(e_\theta, k) = \begin{cases} +10.0 + \min(40.0, \, 0.1 \cdot k) & \text{if } |e_\theta| \le \frac{\pi}{180}\text{ rad } (\pm 1.0^\circ \text{ buffer around } 180^\circ) \\ 0.0 & \text{otherwise} \end{cases}$$
-    $$R_{\text{spin}}(\dot{\theta}) = \begin{cases} +20.0 & \text{if } |\dot{\theta}| > 2\pi\text{ rad/s } (> 360^\circ/\text{s continuous spinning}) \\ 0.0 & \text{otherwise} \end{cases}$$
-    and weights $w_\theta = 1.0$, $w_\omega = 0.2$, and $w_u = 0.001$. This formulation creates a powerful potential well that progressively increases reward up to $+50.0$ for long-duration balance holding while penalizing rapid propeller spinning and aggressive motor chattering.
+    $$R_{\text{spin}}(\dot{\theta}) = \begin{cases} 50.0 + 0.15\left(|\dot{\theta}| - 360\right) & \text{if } |\dot{\theta}| > 360^\circ/\text{s} \\ 0.0 & \text{otherwise} \end{cases}$$
+    with $|\dot\theta|$ in deg/s, so the penalty grows with excess speed rather than being a flat constant.
+
+    A dense shaping term $\cos\theta$ is added, and the quadratic weights are $w_\theta = 2.0$,
+    $w_\omega = 0.05$, $w_u = 0.01$ (on the *normalised* action), plus a soft cart-excursion penalty
+    near the rail ends. The $\pm1^\circ$ holding bonus alone is unreachable by random exploration —
+    it occupies roughly $0.6\%$ of the angular range — so without the $\cos\theta$ shaping the
+    gradient is effectively flat and the agent never discovers the balanced region.
+
+> [!IMPORTANT]
+> **Reward timing.** $r_t$ is evaluated on $s_{t+1}$, the state resulting from $a_t$. Scoring the
+> pre-transition state $s_t$ misattributes credit by one step.
+
+> [!NOTE]
+> **Discounting.** At $\Delta t = 10\ \text{ms}$, $\gamma = 0.99$ corresponds to an effective
+> horizon of only $\approx 1\ \text{s}$. For sustained balancing, $\gamma = 0.999$ ($\approx 10\ \text{s}$)
+> is the better match to the task timescale.
 *   **Discount Factor ($\gamma$):** Set to $\gamma = 0.99$ for infinite-horizon continuous stabilization.
 
 ### 5.2 Proximal Policy Optimization (PPO) & Soft Actor-Critic (SAC)
@@ -148,10 +175,35 @@ A primary failure mode when deploying simulation-trained neural networks onto ph
 
 In our HIL architecture, the round-trip latency $L_{\text{total}}$ consists of:
 $$L_{\text{total}} = T_{\text{I2C}} + T_{\text{FW\_pack}} + T_{\text{USB\_TX}} + T_{\text{Py\_parse}} + T_{\text{Inference}} + T_{\text{USB\_RX}} + T_{\text{PWM}}$$
-Measured empirical timing across 10,000 samples yields:
-*   $T_{\text{I2C}}$ (AS5600 400 kHz Fast I2C read): $120\ \mu\text{s}$
-*   $T_{\text{USB\_TX/RX}}$ (USB CDC serial frame transport @ 115200 baud): $680\ \mu\text{s}$
-*   $T_{\text{Py\_parse} + T_{\text{Inference}}}$ (PyQt6 event loop + PPO policy evaluation): $350\ \mu\text{s}$
-*   **Total Round-Trip Latency ($L_{\text{total}}$):** $\approx 1.45\text{ ms}$ (well below the $10\text{ ms}$ simulation discretization step $dt = 0.01\text{ s}$).
 
-By injecting uniform random latency perturbations $\tilde{L} \sim \mathcal{U}(1.0\text{ ms}, 3.0\text{ ms})$ and 12-bit angle noise $\tilde{\eta} \sim \mathcal{N}(0, \sigma^2)$ during offline numerical training in `InvertedPendulumEnv(simulated=True)`, our policies achieve zero-shot Sim-to-Real transfer when deployed via `RLBalancer` onto physical USB hardware.
+Order-of-magnitude budget (analytical, **not** yet measured on this rig):
+*   $T_{\text{I2C}}$ — AS5600 two-byte read at 400 kHz: $\approx 100\ \mu\text{s}$
+*   $T_{\text{USB\_TX/RX}}$ — a $\approx 8$-character ASCII line at 115200 baud is
+    $\approx 8 \times 10 / 115200 \approx 700\ \mu\text{s}$ *per direction*, plus USB frame
+    scheduling quantised to the $1\ \text{ms}$ host polling interval
+*   $T_{\text{Py\_parse}} + T_{\text{Inference}}$ — MLP forward pass under the Qt timer: $\approx 0.3\text{–}1\ \text{ms}$
+
+> [!WARNING]
+> **These figures are estimates and must be measured before publication.** Two effects dominate and
+> push the realistic round trip toward $3\text{–}5\ \text{ms}$ rather than the $1.45\ \text{ms}$
+> previously claimed here: (i) USB CDC transfers are scheduled on $1\ \text{ms}$ host frames in each
+> direction, and (ii) the Python control loop is driven by a Qt timer, so its jitter is bounded by
+> the GUI event loop rather than by serial throughput. The earlier per-stage numbers were not
+> obtained from any instrumentation in this repository.
+
+### 6.1 Sensing and Actuation Limits
+Two hardware limits bound achievable performance and should be stated plainly:
+*   **Angular quantisation.** The AS5600 is 12-bit over $360^\circ$, i.e. $0.088^\circ$ per LSB.
+    Differentiating that at $100\ \text{Hz}$ yields $\approx 8.8^\circ/\text{s}$ of velocity noise per
+    LSB — comparable to the velocity deadzone itself, which is why derivative terms require
+    low-pass filtering.
+*   **Unobserved cart position.** The platform instruments the pendulum pivot only. The cart
+    position $x$ and velocity $\dot{x}$ are therefore **not measured**, so the deployed feedback is
+    $u = u(\theta, \dot{\theta})$, a partial-state restriction of the four-state LQR derived in
+    §3. This suffices to hold the pole vertical but leaves the cart position unregulated: it drifts
+    until it reaches a rail end-stop. Closing the loop on all four states — and thus realising the
+    LQR gain $K \in \mathbb{R}^{1\times4}$ above — requires adding cart odometry.
+
+**Sim-to-real.** Domain randomisation over latency and sensor noise is a planned mitigation; it is
+**not yet implemented** in `InvertedPendulumEnv`, and no zero-shot transfer result has been
+demonstrated on this hardware. Claims to that effect should not be made until measured.
