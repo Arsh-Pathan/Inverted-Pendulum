@@ -43,10 +43,10 @@ class ControlPanel(QWidget):
         self.btn_start = QPushButton("START OSCILLATION")
         self.btn_start.setStyleSheet("""
             QPushButton {
-                background-color: #2ecc71; color: white; font-weight: bold; font-size: 14px;
-                border: none; border-radius: 4px; padding: 10px;
+                background-color: #27ae60; color: white; font-weight: 700; font-size: 13px;
+                border: 1px solid #1e8449; border-radius: 6px; padding: 10px 14px;
             }
-            QPushButton:hover { background-color: #27ae60; }
+            QPushButton:hover { background-color: #2ecc71; border-color: #27ae60; }
             QPushButton:pressed { background-color: #1e8449; }
         """)
         self.btn_start.clicked.connect(self.start_clicked.emit)
@@ -54,10 +54,10 @@ class ControlPanel(QWidget):
         self.btn_stop = QPushButton("STOP / BRAKE")
         self.btn_stop.setStyleSheet("""
             QPushButton {
-                background-color: #e74c3c; color: white; font-weight: bold; font-size: 14px;
-                border: none; border-radius: 4px; padding: 10px;
+                background-color: #c0392b; color: white; font-weight: 700; font-size: 13px;
+                border: 1px solid #922b21; border-radius: 6px; padding: 10px 14px;
             }
-            QPushButton:hover { background-color: #c0392b; }
+            QPushButton:hover { background-color: #e74c3c; border-color: #c0392b; }
             QPushButton:pressed { background-color: #922b21; }
         """)
         self.btn_stop.clicked.connect(self._on_stop_clicked)
@@ -115,20 +115,20 @@ class ControlPanel(QWidget):
         self.btn_balance = QPushButton("Start Auto-Balance [PID Mode]")
         self.btn_balance.setStyleSheet("""
             QPushButton {
-                background-color: #3498db; color: white; font-weight: bold; font-size: 15px;
-                border: none; border-radius: 4px; padding: 12px;
+                background-color: #2980b9; color: white; font-weight: 700; font-size: 14px;
+                border: 1px solid #1c5980; border-radius: 6px; padding: 12px;
             }
-            QPushButton:hover { background-color: #2980b9; }
+            QPushButton:hover { background-color: #3498db; border-color: #2980b9; }
         """)
         self.btn_balance.clicked.connect(self._toggle_balance)
 
         self.btn_tare = QPushButton("Tare Zero")
         self.btn_tare.setStyleSheet("""
             QPushButton {
-                background-color: #f39c12; color: white; font-weight: bold; font-size: 15px;
-                border: none; border-radius: 4px; padding: 12px;
+                background-color: #d35400; color: white; font-weight: 700; font-size: 14px;
+                border: 1px solid #a04000; border-radius: 6px; padding: 12px;
             }
-            QPushButton:hover { background-color: #e67e22; }
+            QPushButton:hover { background-color: #e67e22; border-color: #d35400; }
         """)
         self.btn_tare.clicked.connect(self.tare_clicked.emit)
 
@@ -259,17 +259,17 @@ class ControlPanel(QWidget):
             if mode == self.active_mode:
                 btn.setStyleSheet(f"""
                     QPushButton {{
-                        background-color: {dark}; color: white; font-weight: bold; font-size: 13px;
-                        border: 2px solid #000000; border-radius: 4px; padding: 8px;
+                        background-color: {dark}; color: white; font-weight: 700; font-size: 12px;
+                        border: 1px solid #111111; border-radius: 6px; padding: 8px 10px;
                     }}
                 """)
             else:
                 btn.setStyleSheet(f"""
                     QPushButton {{
-                        font-weight: 600; font-size: 12px;
-                        border: 1px solid #cccccc; border-radius: 4px; padding: 7px;
+                        background-color: #2a2a2a; color: #bbbbbb; font-weight: 600; font-size: 12px;
+                        border: 1px solid #444444; border-radius: 6px; padding: 8px 10px;
                     }}
-                    QPushButton:hover {{ background-color: {light}; color: white; }}
+                    QPushButton:hover {{ background-color: {light}; color: white; border-color: {dark}; }}
                 """)
 
     def _on_stop_clicked(self):
@@ -284,17 +284,17 @@ class ControlPanel(QWidget):
             self.btn_balance.setText(f"Stop Auto-Balance [{self.active_mode} Mode]")
             self.btn_balance.setStyleSheet("""
                 QPushButton {
-                    background-color: #e74c3c; color: white; font-weight: bold; font-size: 15px;
-                    border: none; border-radius: 4px; padding: 12px;
+                    background-color: #c0392b; color: white; font-weight: 700; font-size: 14px;
+                    border: 1px solid #922b21; border-radius: 6px; padding: 12px;
                 }
-                QPushButton:hover { background-color: #c0392b; }
+                QPushButton:hover { background-color: #e74c3c; border-color: #c0392b; }
             """)
         else:
             self.btn_balance.setText(f"Start Auto-Balance [{self.active_mode} Mode]")
             self.btn_balance.setStyleSheet("""
                 QPushButton {
-                    background-color: #3498db; color: white; font-weight: bold; font-size: 15px;
-                    border: none; border-radius: 4px; padding: 12px;
+                    background-color: #2980b9; color: white; font-weight: 700; font-size: 14px;
+                    border: 1px solid #1c5980; border-radius: 6px; padding: 12px;
                 }
-                QPushButton:hover { background-color: #2980b9; }
+                QPushButton:hover { background-color: #3498db; border-color: #2980b9; }
             """)
