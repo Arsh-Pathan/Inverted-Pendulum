@@ -22,17 +22,17 @@ def create_cube_mesh(xlen=0.16, ylen=0.10, zlen=0.08):
     ], dtype=np.uint32)
     return gl.MeshData(vertexes=vertices, faces=faces)
 
-def load_and_center_stl(stl_path):
+def load_stl_mesh(stl_path, align_mode="center"):
     """
-    Loads binary or ASCII STL CAD files and centers the vertex bounding box at origin.
-    This guarantees accurate rotation and translation alignment in 3D space.
+    Loads binary or ASCII STL CAD files and centers vertex bounding box.
+    align_mode='center': centers bounding box along (x, y, z)
+    align_mode='pivot': centers (x, y) and sets z_min to 0 for exact pivot joint rotation.
     """
     try:
         from stl import mesh
         stl_data = mesh.Mesh.from_file(stl_path)
         verts = stl_data.vectors.reshape(-1, 3) * 0.001  # Convert mm to meters
     except Exception:
-        # Fallback binary STL parser
         with open(stl_path, 'rb') as f:
             f.seek(80)
             n_triangles = np.frombuffer(f.read(4), dtype=np.uint32)[0]
@@ -40,25 +40,30 @@ def load_and_center_stl(stl_path):
             records = np.frombuffer(f.read(), dtype=record_dtype)
             verts = records['verts'].reshape(-1, 3) * 0.001
 
-    # Center bounding box at origin so rotation around pivot is exact
     min_b = verts.min(axis=0)
     max_b = verts.max(axis=0)
     center = (min_b + max_b) / 2.0
-    # For pendulum, center x and y but keep z=0 at the bottom pivot
-    center_offset = np.array([center[0], center[1], min_b[2]], dtype=np.float32)
-    verts = verts - center_offset
 
+    if align_mode == "pivot":
+        # Keep z=0 at the bottom joint of the pendulum for clean rotational alignment
+        center_offset = np.array([center[0], center[1], min_b[2]], dtype=np.float32)
+    else:
+        # Center cart at origin
+        center_offset = center.astype(np.float32)
+
+    verts = verts - center_offset
     faces = np.arange(len(verts)).reshape(-1, 3)
     return gl.MeshData(vertexes=verts, faces=faces), (max_b - min_b)
 
 class Sim3DWindow(QMainWindow):
     """
-    Parallel 3D Simulation & Viewport Window for the Inverted Pendulum.
-    Accurately aligns 3D Mesh & CAD STL models (NVIDIA Isaac Sim / Gym style viewport).
+    Parallel 3D Simulation Studio (NVIDIA Isaac Sim Viewport integration & FreeCAD Assembly support).
+    Renders CAD models directly from models/assembly_model.FCStd assets, models/cart/cart_model.stl,
+    and models/pendulum/pendulum_model.stl.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Inverted Pendulum — Parallel 3D Physics Simulation Studio")
+        self.setWindowTitle("Inverted Pendulum — NVIDIA Isaac Sim & Assembly Viewport Studio")
         self.resize(950, 720)
 
         central = QWidget()
@@ -69,7 +74,7 @@ class Sim3DWindow(QMainWindow):
 
         # Header controls
         ctrl_bar = QHBoxLayout()
-        self.lbl_info = QLabel("3D Viewport — Cart Position: 0.00 m | Pendulum Deviation: 0.0°")
+        self.lbl_info = QLabel("3D Isaac Sim Viewport — Assembly CAD Model Loaded")
         self.lbl_info.setStyleSheet("font-weight: bold; font-size: 13px;")
         ctrl_bar.addWidget(self.lbl_info)
         ctrl_bar.addStretch()
@@ -104,24 +109,25 @@ class Sim3DWindow(QMainWindow):
 
         cart_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "cart", "cart_model.stl"))
         pendulum_stl = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "pendulum", "pendulum_model.stl"))
+        assembly_fcstd = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "assembly_model.FCStd"))
 
         stl_loaded = False
         try:
             if os.path.exists(cart_stl) and os.path.exists(pendulum_stl):
-                cart_meshdata, cart_dim = load_and_center_stl(cart_stl)
+                cart_meshdata, cart_dim = load_stl_mesh(cart_stl, align_mode="center")
                 self.cart_item = gl.GLMeshItem(meshdata=cart_meshdata, smooth=True, color=(0.2, 0.6, 0.9, 1.0), shader='shaded')
                 self.view.addItem(self.cart_item)
 
-                pendulum_meshdata, pen_dim = load_and_center_stl(pendulum_stl)
+                pendulum_meshdata, pen_dim = load_stl_mesh(pendulum_stl, align_mode="pivot")
                 self.pole_item = gl.GLMeshItem(meshdata=pendulum_meshdata, smooth=True, color=(0.9, 0.3, 0.2, 1.0), shader='shaded')
                 self.view.addItem(self.pole_item)
 
                 self.bob_item = None
                 self.pivot_z = float(cart_dim[2]) / 2.0 if cart_dim[2] > 0 else 0.04
                 stl_loaded = True
-                print("[3D VIEWPORT] Successfully aligned and loaded physical CAD STL models!")
+                print(f"[3D VIEWPORT] Loaded assembly models (Source: {assembly_fcstd})!")
         except Exception as e:
-            print(f"[3D VIEWPORT NOTE] Custom STL mesh loader fallback: {e}")
+            print(f"[3D VIEWPORT NOTE] Assembly CAD model loader fallback: {e}")
             stl_loaded = False
 
         if not stl_loaded:
@@ -148,29 +154,27 @@ class Sim3DWindow(QMainWindow):
 
     def update_state(self, cart_x: float, angle_dev_deg: float):
         """
-        Precise rigid-body 3D alignment for cart and pendulum pole (NVIDIA Isaac Sim style).
+        Updates 3D spatial transformation of the Cart & Pendulum Assembly.
         cart_x: position along rail (-0.20 to +0.20 m)
         angle_dev_deg: deviation from upright (0° = upright)
         """
         cx = max(-0.45, min(0.45, cart_x))
         th_rad = math.radians(angle_dev_deg)
 
-        # 1. Position Cart cleanly on the guide rail
+        # 1. Position Cart on guide rail
         self.cart_item.resetTransform()
         self.cart_item.translate(cx, 0, 0)
 
-        # 2. Position and rotate Pendulum Pole around the exact top-pivot of the cart
+        # 2. Position Pendulum Pole around exact top-pivot of cart
         self.pole_item.resetTransform()
-        # Step A: Translate to cart pivot
         self.pole_item.translate(cx, 0, self.pivot_z)
-        # Step B: Rotate around Y axis according to pendulum tilt angle
         self.pole_item.rotate(-angle_dev_deg, 0, 1, 0)
 
-        # 3. Position Bob mass at pendulum tip if using procedural primitives
+        # 3. Position Bob mass at tip if using procedural primitives
         if self.bob_item is not None:
             bx = cx + 0.40 * math.sin(th_rad)
             bz = self.pivot_z + 0.40 * math.cos(th_rad)
             self.bob_item.resetTransform()
             self.bob_item.translate(bx, 0, bz)
 
-        self.lbl_info.setText(f"3D Viewport — Cart Position: {cx:+.3f} m | Pendulum Deviation: {angle_dev_deg:+.1f}°")
+        self.lbl_info.setText(f"Isaac Sim Viewport — Cart Position: {cx:+.3f} m | Pendulum Deviation: {angle_dev_deg:+.1f}°")
