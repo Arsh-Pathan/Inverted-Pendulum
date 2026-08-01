@@ -74,8 +74,8 @@ class Sim3DWindow(QMainWindow):
 
         # Header controls
         ctrl_bar = QHBoxLayout()
-        self.lbl_info = QLabel("3D Isaac Sim Viewport — Assembly CAD Model Loaded")
-        self.lbl_info.setStyleSheet("font-weight: bold; font-size: 13px;")
+        self.lbl_info = QLabel("3D Isaac Sim Viewport — FreeCAD Assembly Model (models/assembly_model.FCStd)")
+        self.lbl_info.setStyleSheet("font-weight: bold; font-size: 13px; color: #3498db;")
         ctrl_bar.addWidget(self.lbl_info)
         ctrl_bar.addStretch()
 
@@ -125,7 +125,7 @@ class Sim3DWindow(QMainWindow):
                 self.bob_item = None
                 self.pivot_z = float(cart_dim[2]) / 2.0 if cart_dim[2] > 0 else 0.04
                 stl_loaded = True
-                print(f"[3D VIEWPORT] Loaded assembly models (Source: {assembly_fcstd})!")
+                print(f"[3D VIEWPORT] Rendering FreeCAD Assembly CAD Model: {assembly_fcstd} ({os.path.getsize(assembly_fcstd)/1024/1024:.2f} MB)")
         except Exception as e:
             print(f"[3D VIEWPORT NOTE] Assembly CAD model loader fallback: {e}")
             stl_loaded = False
