@@ -363,6 +363,11 @@ class MainWindow(QMainWindow):
         status_row.addWidget(self.lbl_telemetry)
         status_row.addStretch()
 
+        self.btn_3d_win = QPushButton("Launch 3D Simulation Window")
+        self.btn_3d_win.setStyleSheet("background-color: #8e44ad; color: white; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+        self.btn_3d_win.clicked.connect(self.toggle_3d_window)
+        status_row.addWidget(self.btn_3d_win)
+
         self.btn_dark_mode = QPushButton("Dark Mode")
         self.btn_dark_mode.setCheckable(True)
         self.btn_dark_mode.clicked.connect(self.toggle_dark_mode)
@@ -1162,6 +1167,21 @@ class MainWindow(QMainWindow):
             self.lbl_telemetry.setText(f"Time: {self.elapsed_time:.1f}s | Port: Searching for hardware endpoint...")
 
         self.canvas_widget.update_state(self.theta)
+
+        # Update Parallel 3D Simulation Window if active
+        if hasattr(self, "sim_3d_win") and self.sim_3d_win and self.sim_3d_win.isVisible():
+            # Estimate cart_x from active PID controller or default to 0
+            cart_x = getattr(self.pid_balancer, "est_cart_x", 0.0)
+            self.sim_3d_win.update_state(cart_x, short_a)
+
+    def toggle_3d_window(self):
+        if not hasattr(self, "sim_3d_win") or self.sim_3d_win is None:
+            from .sim_3d_window import Sim3DWindow
+            self.sim_3d_win = Sim3DWindow()
+        if self.sim_3d_win.isVisible():
+            self.sim_3d_win.hide()
+        else:
+            self.sim_3d_win.show()
 
     def tick_graph(self):
         if not self._data_dirty: return
