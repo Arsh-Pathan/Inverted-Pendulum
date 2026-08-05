@@ -7,6 +7,7 @@ from .lqr_balancer import LQRBalancer
 from .swing_up import SwingUpController
 from .hybrid_balancer import HybridBalancer
 from .oscillation import OscillationController
+from .discrete_balancer import DiscreteTrackBalancer, DiscreteAction
 
 try:
     import sys
@@ -23,5 +24,7 @@ __all__ = [
     "SwingUpController",
     "HybridBalancer",
     "OscillationController",
+    "DiscreteTrackBalancer",
+    "DiscreteAction",
     "RLBalancer"
 ]
