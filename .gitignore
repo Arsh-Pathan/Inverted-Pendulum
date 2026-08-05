@@ -42,6 +42,9 @@ test.log
 logs/
 *.csv
 tests/test_logs_tmp/
+scratch/
+algorithm/scratch/
+
 
 # IDE and Editor files
 .idea/
