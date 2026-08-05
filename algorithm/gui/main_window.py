@@ -741,6 +741,9 @@ class MainWindow(QMainWindow):
         self.ctrl_panel.speed_changed.connect(lambda v: self.oscillation_ctrl.update_params({"speed": v}))
         self.ctrl_panel.duration_changed.connect(lambda v: self.oscillation_ctrl.update_params({"duration_ms": v}))
         self.ctrl_panel.pid_changed.connect(self._on_pid_changed)
+        self.ctrl_panel.manual_drive_started.connect(self._on_manual_drive_started)
+        self.ctrl_panel.manual_drive_stopped.connect(self._on_manual_drive_stopped)
+        self.ctrl_panel.manual_brake_clicked.connect(self._on_manual_brake)
 
     def _on_invert_display_toggled(self, checked: bool):
         self.invert_display = checked
@@ -1240,6 +1243,29 @@ class MainWindow(QMainWindow):
         if self.serial_client:
             self.serial_client.stop_client()
         event.accept()
+
+    # ── Manual Drive Buttons (hold-to-drive GUI override) ──
+    # Same guard rules as the keyboard override: never fight an active control loop.
+    def _on_manual_drive_started(self, power: int):
+        if self.ctrl_panel.is_balancing or self.oscillation_ctrl.enabled:
+            return
+        if self.serial_client and self.serial_client.isRunning():
+            if self.invert_motor:
+                power = -power
+            self.serial_client.send_command(cmd_motor(power))
+            self.current_action = power
+            print(f"[MANUAL DRIVE] Motor set to {power:+d} PWM")
+
+    def _on_manual_drive_stopped(self):
+        if self.serial_client and self.serial_client.isRunning():
+            self.serial_client.send_command(cmd_coast())
+            self.current_action = 0
+
+    def _on_manual_brake(self):
+        if self.serial_client and self.serial_client.isRunning():
+            self.serial_client.send_command(cmd_brake())
+            self.current_action = 0
+            print("[MANUAL DRIVE] BRAKE applied.")
 
     # ── Keyboard Manual Override ──
     def keyPressEvent(self, event):

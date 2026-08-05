@@ -27,7 +27,8 @@
         "max_motor_power": 255,
         "equilibrium_deadzone_deg": 0.0,
         "equilibrium_deadzone_vel": 0.0,
-        "dither_power": 0
+        "dither_power": 0,
+        "manual_speed": 255
     },
     "oscillation": {
         "speed": 255,

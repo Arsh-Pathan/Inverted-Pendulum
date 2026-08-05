@@ -20,6 +20,10 @@ class ControlPanel(QWidget):
     duration_changed = pyqtSignal(int)
     pid_changed = pyqtSignal(dict) # dictionary of updated PID params
 
+    manual_drive_started = pyqtSignal(int)
+    manual_drive_stopped = pyqtSignal()
+    manual_brake_clicked = pyqtSignal()
+
     def __init__(self, initial_config: dict, parent=None):
         super().__init__(parent)
         self.is_balancing = False
@@ -171,6 +175,62 @@ class ControlPanel(QWidget):
         settings_layout.addWidget(lbl_dist, 0, 1)
         settings_layout.addWidget(self.spin_dist, 1, 1)
         ctrl_layout.addLayout(settings_layout)
+
+        # Row 2.5: Manual Drive Buttons (hold-to-drive, mirrors the A/D keyboard override)
+        manual_drive_style = """
+            QPushButton {
+                background-color: #16a085; color: white; font-weight: 700; font-size: 13px;
+                border: 1px solid #0e6655; border-radius: 6px; padding: 10px 12px;
+            }
+            QPushButton:hover { background-color: #1abc9c; border-color: #16a085; }
+            QPushButton:pressed { background-color: #0e6655; }
+        """
+        manual_brake_style = """
+            QPushButton {
+                background-color: #c0392b; color: white; font-weight: 700; font-size: 13px;
+                border: 1px solid #922b21; border-radius: 6px; padding: 10px 12px;
+            }
+            QPushButton:hover { background-color: #e74c3c; border-color: #c0392b; }
+            QPushButton:pressed { background-color: #922b21; }
+        """
+
+        lbl_manual = QLabel("MANUAL DRIVE (HOLD TO MOVE):")
+        lbl_manual.setStyleSheet(small_title_style)
+        ctrl_layout.addWidget(lbl_manual)
+
+        manual_layout = QHBoxLayout()
+        manual_layout.setSpacing(8)
+
+        self.spin_manual_speed = QSpinBox()
+        self.spin_manual_speed.setRange(0, 255)
+        self.spin_manual_speed.setSingleStep(5)
+        self.spin_manual_speed.setValue(self.config.get("control", {}).get("manual_speed", 120))
+        self.spin_manual_speed.setStyleSheet(spinbox_style)
+        self.spin_manual_speed.setToolTip("Manual drive power (0-255)")
+        self.spin_manual_speed.valueChanged.connect(lambda v: self.pid_changed.emit({"manual_speed": v}))
+        manual_layout.addWidget(self.spin_manual_speed)
+
+        self.btn_manual_left = QPushButton("LEFT")
+        self.btn_manual_left.setStyleSheet(manual_drive_style)
+        self.btn_manual_left.setToolTip("Hold to drive the cart left")
+        self.btn_manual_left.pressed.connect(lambda: self.manual_drive_started.emit(-self.spin_manual_speed.value()))
+        self.btn_manual_left.released.connect(self.manual_drive_stopped.emit)
+        manual_layout.addWidget(self.btn_manual_left, 1)
+
+        self.btn_manual_right = QPushButton("RIGHT")
+        self.btn_manual_right.setStyleSheet(manual_drive_style)
+        self.btn_manual_right.setToolTip("Hold to drive the cart right")
+        self.btn_manual_right.pressed.connect(lambda: self.manual_drive_started.emit(self.spin_manual_speed.value()))
+        self.btn_manual_right.released.connect(self.manual_drive_stopped.emit)
+        manual_layout.addWidget(self.btn_manual_right, 1)
+
+        self.btn_manual_brake = QPushButton("STOP")
+        self.btn_manual_brake.setStyleSheet(manual_brake_style)
+        self.btn_manual_brake.setToolTip("Hard brake the motor")
+        self.btn_manual_brake.clicked.connect(self.manual_brake_clicked.emit)
+        manual_layout.addWidget(self.btn_manual_brake, 1)
+
+        ctrl_layout.addLayout(manual_layout)
 
         # Row 3: PID Tuning Spinboxes
         pid_layout = QHBoxLayout()
